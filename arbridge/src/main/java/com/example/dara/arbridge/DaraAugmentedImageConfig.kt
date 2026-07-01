@@ -19,6 +19,14 @@ data class DaraAugmentedImageConfig(
     val isEnabled: Boolean
         get() = !imageAssetPath.isNullOrBlank()
 
+    val displayName: String
+        get() = imageAssetPath
+            ?.trim()
+            ?.removePrefix("file:///android_asset/")
+            ?.trim('/')
+            ?.takeIf { it.isNotBlank() }
+            ?: imageName
+
     fun createDatabase(context: Context, session: Session, logTag: String): AugmentedImageDatabase? {
         val assetPath = imageAssetPath
             ?.trim()

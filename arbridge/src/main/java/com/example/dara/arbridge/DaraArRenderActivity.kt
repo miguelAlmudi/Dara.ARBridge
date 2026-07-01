@@ -58,7 +58,6 @@ import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.scene.PlaneRendererBase
 import io.github.sceneview.math.Size
 import io.github.sceneview.model.ModelInstance
-import io.github.sceneview.node.ImageNode
 import io.github.sceneview.node.TextNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelLoader
@@ -70,10 +69,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.runtime.key
 import com.google.android.filament.utils.rotation
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
 class DaraArRenderActivity : ComponentActivity() {
@@ -239,6 +238,12 @@ class DaraArRenderActivity : ComponentActivity() {
         val rawPath = modelAssetPath
         val resolvedPath = resolveModelPath(rawPath)
         val imageTrackingEnabled = augmentedImageConfig.isEnabled
+        val billboardObjectId = if (imageTrackingEnabled) {
+            augmentedImageConfig.displayName
+        }
+        else {
+            modelId
+        }
 
         Log.d(tag, "showArScene raw=$rawPath resolved=$resolvedPath augmentedImage=$augmentedImageConfig")
 
@@ -254,14 +259,25 @@ class DaraArRenderActivity : ComponentActivity() {
                 val referenceImageName: String? = null,
                 val referenceImageExtentX: Float? = null,
                 val referenceImageExtentZ: Float? = null,
+                val referenceImagePosition: Position? = null,
                 val localPosition: Position = Position(0f, 0f, 0f),
                 val localRotation: Rotation = Rotation(x = 0f, y = 0f, z = 0f),
                 val scaleToUnits: Float = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS
             )
+
             val placedKeys = remember { mutableStateListOf<Placed>() }
             val cachedInstances = remember { mutableMapOf<String, ModelInstance>() }
             var frame by remember { mutableStateOf<Frame?>(null) }
             var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
+            val latestCameraPosition = remember {
+                AtomicReference(Position(0f, 0f, 0f))
+            }
+            val latestAugmentedImagePosition = remember {
+                AtomicReference<Position?>(null)
+            }
+            val latestCanMeasureAugmentedImage = remember {
+                AtomicReference(false)
+            }
             var debugLog by remember {
                 mutableStateOf(
                     "raw=$rawPath\nresolved=$resolvedPath\naugmentedImage=${augmentedImageConfig.imageAssetPath}"
@@ -315,24 +331,49 @@ class DaraArRenderActivity : ComponentActivity() {
                             .createDatabase(this@DaraArRenderActivity, session, tag)
                             ?.let { database -> config.augmentedImageDatabase = database }
                     },
-                    onSessionUpdated = { _, arFrame ->
+                    onSessionUpdated = { session, arFrame ->
                         frame = arFrame
                         val cameraPose = arFrame.camera.pose
-                        cameraPosition = Position(
+                        val currentCameraPosition = Position(
                             x = cameraPose.tx(),
                             y = cameraPose.ty(),
                             z = cameraPose.tz()
                         )
+                        cameraPosition = currentCameraPosition
+                        latestCameraPosition.set(currentCameraPosition)
 
                         if (imageTrackingEnabled && resolvedPath != null) {
-                            arFrame
-                                .getUpdatedTrackables(AugmentedImage::class.java)
-                                .firstOrNull { image ->
-                                    image.trackingState == TrackingState.TRACKING &&
-                                            image.name == augmentedImageConfig.imageName &&
-                                            placedKeys.none { placed -> placed.referenceImageName == image.name }
-                                }
+                            val trackedImage = session
+                                .getAllTrackables(AugmentedImage::class.java)
+                                .firstOrNull { image -> image.name == augmentedImageConfig.imageName }
+
+                            latestCanMeasureAugmentedImage.set(
+                                trackedImage?.trackingState == TrackingState.TRACKING
+                            )
+
+                            trackedImage
+                                ?.takeIf { image -> image.trackingState == TrackingState.TRACKING }
                                 ?.let { image ->
+                                    val currentImagePosition = Position(
+                                        x = image.centerPose.tx(),
+                                        y = image.centerPose.ty(),
+                                        z = image.centerPose.tz()
+                                    )
+                                    latestAugmentedImagePosition.set(currentImagePosition)
+                                    val placedImageIndex = placedKeys.indexOfFirst { placed ->
+                                        placed.referenceImageName == image.name
+                                    }
+
+                                    if (placedImageIndex >= 0) {
+                                        val placed = placedKeys[placedImageIndex]
+                                        placedKeys[placedImageIndex] = placed.copy(
+                                            referenceImageExtentX = image.extentX,
+                                            referenceImageExtentZ = image.extentZ,
+                                            referenceImagePosition = currentImagePosition
+                                        )
+                                        return@let
+                                    }
+
                                     try {
                                         placedKeys.forEach { placed -> placed.anchor.detach() }
                                         placedKeys.clear()
@@ -350,6 +391,7 @@ class DaraArRenderActivity : ComponentActivity() {
                                                 referenceImageName = image.name,
                                                 referenceImageExtentX = image.extentX,
                                                 referenceImageExtentZ = image.extentZ,
+                                                referenceImagePosition = currentImagePosition,
                                                 localPosition = augmentedImageConfig.offset,
                                                 scaleToUnits = augmentedImageConfig.modelScaleToUnits
                                             )
@@ -367,10 +409,6 @@ class DaraArRenderActivity : ComponentActivity() {
                         }
                     },
                     onTouchEvent = { event: MotionEvent, hitResult ->
-                        if (imageTrackingEnabled) {
-                            return@ARSceneView false
-                        }
-
                         // Edit Mode
                         if (!isAddMode) {
                             when (controlMode) {
@@ -471,6 +509,8 @@ class DaraArRenderActivity : ComponentActivity() {
                                     when (event.actionMasked) {
                                         MotionEvent.ACTION_DOWN -> {
                                             isDraggingModel = hitResult != null
+                                            lastGizmoTouchX = event.x
+                                            lastGizmoTouchY = event.y
 
                                             if (isDraggingModel) {
                                                 debugLog = "Gesture drag started"
@@ -483,6 +523,29 @@ class DaraArRenderActivity : ComponentActivity() {
                                         MotionEvent.ACTION_MOVE -> {
                                             if (!isDraggingModel) {
                                                 return@ARSceneView false
+                                            }
+
+                                            if (imageTrackingEnabled && placedKeys.isNotEmpty()) {
+                                                val dx = event.x - lastGizmoTouchX
+                                                val dy = event.y - lastGizmoTouchY
+                                                lastGizmoTouchX = event.x
+                                                lastGizmoTouchY = event.y
+
+                                                val old = placedKeys[0]
+                                                val sensitivity = 0.0015f
+                                                val oldPos = old.localPosition
+                                                val newLocalPosition = Position(
+                                                    x = oldPos.x + (dx * sensitivity),
+                                                    y = oldPos.y,
+                                                    z = oldPos.z + (dy * sensitivity)
+                                                )
+
+                                                placedKeys[0] = old.copy(
+                                                    localPosition = newLocalPosition
+                                                )
+
+                                                debugLog = "Dragging model on image\n position=${newLocalPosition.x}, ${newLocalPosition.y}, ${newLocalPosition.z}\n billboard=fixed-on-anchor"
+                                                return@ARSceneView true
                                             }
 
                                             val f = frame ?: run {
@@ -651,26 +714,58 @@ class DaraArRenderActivity : ComponentActivity() {
                                     position = DaraBillboard.AUGMENTED_IMAGE_OFFSET,
                                     rotation = Rotation(x = -90f)
                                 ) {
-                                    val billboardBitmap = TextNode.renderTextBitmap(
-                                        text = DaraBillboard.labelTextBetween(
-                                            objectId = modelId,
-                                            from = Position(0f, 0f, 0f),
-                                            to = placed.localPosition
-                                        ),
-                                        fontSize = 88f,
-                                        textColor = android.graphics.Color.BLACK,
-                                        backgroundColor = 0xFFF4D03F.toInt(),
-                                        bitmapWidth = 1400,
-                                        bitmapHeight = 1400
-                                    )
-
+                                    val billboardSpec = remember(
+                                        placed.referenceImageExtentX,
+                                        placed.referenceImageExtentZ
+                                    ) {
+                                        DaraBillboard.augmentedImageBillboardSpec(
+                                            extentX = placed.referenceImageExtentX,
+                                            extentZ = placed.referenceImageExtentZ
+                                        )
+                                    }
+                                    val billboardBitmap = remember(
+                                        billboardSpec.bitmapWidth,
+                                        billboardSpec.bitmapHeight
+                                    ) {
+                                        Bitmap.createBitmap(
+                                            billboardSpec.bitmapWidth,
+                                            billboardSpec.bitmapHeight,
+                                            Bitmap.Config.ARGB_8888
+                                        )
+                                    }
                                     ImageNode(
                                         bitmap = billboardBitmap,
-                                        size = Size(
-                                            x = placed.referenceImageExtentX ?: 0.20f,
-                                            y = placed.referenceImageExtentZ ?: 0.20f
-                                        ),
+                                        size = billboardSpec.size,
                                         apply = {
+                                            var lastBillboardText: String? = null
+                                            onFrame = {
+                                                val imagePosition = latestAugmentedImagePosition.get()
+                                                val currentBillboardText =
+                                                    if (latestCanMeasureAugmentedImage.get() && imagePosition != null) {
+                                                        DaraBillboard.augmentedImageDistanceText(
+                                                            imageName = billboardObjectId,
+                                                            from = latestCameraPosition.get(),
+                                                            to = imagePosition
+                                                        )
+                                                    }
+                                                    else {
+                                                        DaraBillboard.augmentedImageMeasurementProblemText(
+                                                            billboardObjectId
+                                                        )
+                                                    }
+
+                                                if (currentBillboardText != lastBillboardText) {
+                                                    DaraBillboard.renderTextBitmapInto(
+                                                        bitmap = billboardBitmap,
+                                                        text = currentBillboardText,
+                                                        fontSize = billboardSpec.fontSize,
+                                                        textColor = android.graphics.Color.WHITE,
+                                                        backgroundColor = DaraBillboard.AUGMENTED_IMAGE_BACKGROUND_COLOR
+                                                    )
+                                                    this.bitmap = billboardBitmap
+                                                    lastBillboardText = currentBillboardText
+                                                }
+                                            }
                                             isTouchable = false
                                             isHittable = false
                                         }
