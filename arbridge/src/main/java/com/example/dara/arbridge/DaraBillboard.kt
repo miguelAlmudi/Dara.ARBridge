@@ -24,7 +24,7 @@ object DaraBillboard {
 
     val DEFAULT_OFFSET = Position(0f, 0.35f, 0f)
     val AUGMENTED_IMAGE_OFFSET = Position(0f, 0.002f, 0f)
-    val AUGMENTED_IMAGE_BACKGROUND_COLOR = Color.argb(145, 72, 72, 72)
+    val AUGMENTED_IMAGE_BACKGROUND_COLOR = Color.argb(51, 72, 72, 72)
 
     fun labelText(objectId: String, offset: Position = DEFAULT_OFFSET): String {
         return "$objectId - ${formatDistance(distanceFromObject(offset))}"
@@ -145,9 +145,14 @@ object DaraBillboard {
         val fontSizeByHeight = referenceFontSize * (maxTextHeight / referenceTotalHeight)
         val fittedFontSize = min(fontSize, min(fontSizeByWidth, fontSizeByHeight))
             .coerceAtLeast(8f)
+        val opaqueTextColor = Color.rgb(
+            Color.red(textColor),
+            Color.green(textColor),
+            Color.blue(textColor)
+        )
 
         val textFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = textColor
+            color = opaqueTextColor
             textSize = fittedFontSize
             this.typeface = typeface
             textAlign = Paint.Align.CENTER
