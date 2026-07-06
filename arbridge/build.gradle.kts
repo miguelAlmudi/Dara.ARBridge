@@ -35,6 +35,7 @@ dependencies {
 
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
+    implementation("com.google.ar:core:1.50.0")
     implementation(libs.sceneview)
     implementation(libs.arsceneview)
     

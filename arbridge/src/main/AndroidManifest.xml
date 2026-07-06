@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -11,12 +12,13 @@
 
     <uses-feature
         android:name="android.hardware.camera.ar"
-        android:required="false" />
+        android:required="true" />
 
     <application>
         <meta-data
             android:name="com.google.ar.core"
-            android:value="optional" />
+            android:value="required"
+            tools:replace="android:value" />
 
         <activity
             android:name="com.example.dara.arbridge.Dara3dRenderActivity"

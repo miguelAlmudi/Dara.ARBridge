@@ -307,6 +307,7 @@ class DaraArRenderFragment : Fragment() {
                 val latestCameraPosition = remember {
                     AtomicReference(Position(0f, 0f, 0f))
                 }
+                var markerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
                 val latestAugmentedImagePosition = remember {
                     AtomicReference<Position?>(null)
                 }
@@ -329,6 +330,33 @@ class DaraArRenderFragment : Fragment() {
                 var lastGizmoTouchY by remember { mutableStateOf(0f) }
                 var sceneBoundsInWindow by remember { mutableStateOf<Rect?>(null) }
                 var capturedPreview by remember { mutableStateOf<Bitmap?>(null) }
+                var isCameraTracking by remember { mutableStateOf(false) }
+                var trackingWarningTitle by remember { mutableStateOf("Inicializando AR") }
+                var trackingWarningMessage by remember {
+                    mutableStateOf("Mova o celular lentamente para mapear o ambiente.")
+                }
+                val trackingStateHandler = remember {
+                    TrackingStateHandler(
+                        callback = object : TrackingStateHandler.Callback {
+                            override fun onCameraTracking() {
+                                isCameraTracking = true
+                            }
+
+                            override fun onCameraTrackingProblem(
+                                trackingState: TrackingState,
+                                failureReason: com.google.ar.core.TrackingFailureReason,
+                                title: String,
+                                message: String
+                            ) {
+                                isCameraTracking = false
+                                trackingWarningTitle = title
+                                trackingWarningMessage = message
+                                debugLog = "Camera tracking=$trackingState\n reason=$failureReason\n $title\n $message"
+                            }
+                        },
+                        mainHandler = mainHandler
+                    )
+                }
 
                 // Bounding box material
                 val yellowMaterial = remember(materialLoader) {
@@ -366,9 +394,16 @@ class DaraArRenderFragment : Fragment() {
                                 .createDatabase(requireContext(), session, logTag)
                                 ?.let { database -> config.augmentedImageDatabase = database }
                         },
-                        onSessionUpdated = { session, arFrame ->
+                        onSessionUpdated = onSessionUpdated@ { session, arFrame ->
                             frame = arFrame
-                            val cameraPose = arFrame.camera.pose
+
+                            // Gate AR processing until ARCore reports a valid camera track.
+                            if (!trackingStateHandler.handle(arFrame.camera)) {
+                                latestCanMeasureAugmentedImage.set(false)
+                                return@onSessionUpdated
+                            }
+
+                            val cameraPose = arFrame.camera.displayOrientedPose
                             val currentCameraPosition = Position(
                                 x = cameraPose.tx(),
                                 y = cameraPose.ty(),
@@ -376,6 +411,12 @@ class DaraArRenderFragment : Fragment() {
                             )
                             cameraPosition = currentCameraPosition
                             latestCameraPosition.set(currentCameraPosition)
+                            markerCameraPosition = CameraPoseManager.relativeCameraPositionMeters(
+                                camera = arFrame.camera,
+                                originAnchor = placedKeys
+                                    .firstOrNull { placed -> placed.referenceImageName != null }
+                                    ?.anchor
+                            )
 
                             if (imageTrackingEnabled && resolvedPath != null) {
                                 val trackedImage = session
@@ -1100,10 +1141,33 @@ class DaraArRenderFragment : Fragment() {
                             append("\neditable=${!isAddMode && controlMode == ControlMode.GESTURE}")
                             append("\ncontrol=${controlMode.name}")
                             append("\ngizmoAxis=$activeGizmoAxis")
+                            append("\ncameraPosition=${CameraPoseManager.formatPositionMeters(markerCameraPosition)}")
                             append("\nlocal=${placedKeys.firstOrNull()?.localPosition}")
                             append("\n$debugLog")
                         }
                     )
+
+                    if (!isCameraTracking) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .background(Color.Black.copy(alpha = 0.78f))
+                                .padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = trackingWarningTitle,
+                                color = Color.White,
+                                fontSize = 18.sp
+                            )
+                            Text(
+                                text = trackingWarningMessage,
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        }
+                    }
 
                     capturedPreview?.let { preview ->
                         Image(
