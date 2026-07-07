@@ -64,16 +64,15 @@ import com.google.ar.core.TrackingState
 import io.github.sceneview.SurfaceType
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.scene.PlaneRendererBase
-import io.github.sceneview.math.Size
 import io.github.sceneview.math.Position
 import io.github.sceneview.math.Rotation
 import io.github.sceneview.model.ModelInstance
-import io.github.sceneview.node.TextNode
+import io.github.sceneview.node.*
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
+import io.github.sceneview.rememberViewNodeManager
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
 class DaraArRenderFragment : Fragment() {
@@ -279,8 +278,9 @@ class DaraArRenderFragment : Fragment() {
             setContent {
                 val engine = rememberEngine()
                 val modelLoader = rememberModelLoader(engine)
-                    val materialLoader = rememberMaterialLoader(engine)
-                    val rootView = LocalView.current
+                val materialLoader = rememberMaterialLoader(engine)
+                val viewNodeManager = rememberViewNodeManager()
+                val rootView = LocalView.current
 
                 data class Placed(
                     val anchor: Anchor,
@@ -306,8 +306,8 @@ class DaraArRenderFragment : Fragment() {
                 var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
                 var imageReference by remember { mutableStateOf<ImageReference?>(null) }
                 var markerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
-                val latestCameraDistanceText = remember {
-                    AtomicReference(CameraPoseManager.formatDistanceMeters(null))
+                var cameraDistanceText by remember {
+                    mutableStateOf(CameraPoseManager.formatDistanceMeters(null))
                 }
                 var debugLog by remember {
                     mutableStateOf(
@@ -358,7 +358,6 @@ class DaraArRenderFragment : Fragment() {
                     materialLoader.createUnlitColorInstance(Color.Yellow)
                 }
                 val markerCameraPositionText = CameraPoseManager.formatPositionMeters(markerCameraPosition)
-                val cameraDistanceText = CameraPoseManager.formatDistanceMeters(markerCameraPosition)
 
                 Box(Modifier.fillMaxSize()) {
                     ARSceneView(
@@ -376,6 +375,7 @@ class DaraArRenderFragment : Fragment() {
                         engine = engine,
                         modelLoader = modelLoader,
                         materialLoader = materialLoader,
+                        viewNodeWindowManager = viewNodeManager,
                         surfaceType = SurfaceType.TextureSurface,
                         planeRenderer = isAddMode,
                         planeRendererVersion = PlaneRendererBase.Version.V2,
@@ -394,7 +394,10 @@ class DaraArRenderFragment : Fragment() {
                             // Gate AR processing until ARCore reports a valid camera track.
                             if (!trackingStateHandler.handle(arFrame.camera)) {
                                 markerCameraPosition = null
-                                latestCameraDistanceText.set(CameraPoseManager.formatDistanceMeters(null))
+                                val unknownDistanceText = CameraPoseManager.formatDistanceMeters(null)
+                                if (cameraDistanceText != unknownDistanceText) {
+                                    cameraDistanceText = unknownDistanceText
+                                }
                                 return@onSessionUpdated
                             }
 
@@ -423,9 +426,10 @@ class DaraArRenderFragment : Fragment() {
                                     camera = arFrame.camera,
                                     originPose = trackedImage?.centerPose
                                 )
-                            latestCameraDistanceText.set(
-                                CameraPoseManager.formatDistanceMeters(markerCameraPosition)
-                            )
+                            val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(markerCameraPosition)
+                            if (cameraDistanceText != newCameraDistanceText) {
+                                cameraDistanceText = newCameraDistanceText
+                            }
 
                             if (imageTrackingEnabled) {
                                 trackedImage
@@ -802,52 +806,23 @@ class DaraArRenderFragment : Fragment() {
                                         )
                                     }
                                     val billboardTitle = augmentedImageConfig.displayName
-                                    val billboardText = "$billboardTitle\n${latestCameraDistanceText.get()}"
-                                    val billboardBitmap = remember(
-                                        billboardSpec.bitmapWidth,
-                                        billboardSpec.bitmapHeight
-                                    ) {
-                                        Bitmap.createBitmap(
-                                            billboardSpec.bitmapWidth,
-                                            billboardSpec.bitmapHeight,
-                                            Bitmap.Config.ARGB_8888
-                                        )
-                                    }
-                                    DaraBillboard.renderTextBitmapInto(
-                                        bitmap = billboardBitmap,
-                                        text = billboardText,
-                                        fontSize = billboardSpec.fontSize,
-                                        textColor = android.graphics.Color.WHITE,
-                                        backgroundColor = DaraBillboard.AUGMENTED_IMAGE_BACKGROUND_COLOR
-                                    )
+                                    val billboardText = "$billboardTitle\n$cameraDistanceText"
 
-                                    Node(
+                                    ViewNode(
+                                        windowManager = viewNodeManager,
+                                        unlit = true,
                                         position = DaraBillboard.AUGMENTED_IMAGE_OFFSET,
-                                        rotation = Rotation(x = -90f)
+                                        rotation = Rotation(x = -90f),
+                                        apply = {
+                                            isTouchable = false
+                                            isHittable = false
+                                        }
                                     ) {
-                                        ImageNode(
-                                            bitmap = billboardBitmap,
-                                            size = billboardSpec.size,
-                                            apply = {
-                                                var lastBillboardText: String? = billboardText
-                                                onFrame = {
-                                                    val currentBillboardText =
-                                                        "$billboardTitle\n${latestCameraDistanceText.get()}"
-                                                    if (currentBillboardText != lastBillboardText) {
-                                                        DaraBillboard.renderTextBitmapInto(
-                                                            bitmap = billboardBitmap,
-                                                            text = currentBillboardText,
-                                                            fontSize = billboardSpec.fontSize,
-                                                            textColor = android.graphics.Color.WHITE,
-                                                            backgroundColor = DaraBillboard.AUGMENTED_IMAGE_BACKGROUND_COLOR
-                                                        )
-                                                        this.bitmap = billboardBitmap
-                                                        lastBillboardText = currentBillboardText
-                                                    }
-                                                }
-                                                isTouchable = false
-                                                isHittable = false
-                                            }
+                                        DaraBillboard.BillboardContent(
+                                            text = billboardText,
+                                            fontSizeSp = billboardSpec.fontSizeSp,
+                                            textColor = Color.White,
+                                            backgroundColor = Color.Transparent
                                         )
                                     }
                                 }
@@ -889,21 +864,29 @@ class DaraArRenderFragment : Fragment() {
                                     )
 
                                     if (!imageTrackingEnabled) {
-                                        TextNode(
-                                            materialLoader = materialLoader,
-                                            text = DaraBillboard.labelText(modelId),
-                                            fontSize = 44f,
-                                            textColor = android.graphics.Color.WHITE,
-                                            backgroundColor = 0xCC111111.toInt(),
-                                            widthMeters = 0.72f,
-                                            heightMeters = 0.18f,
-                                            cameraPositionProvider = { cameraPosition },
-                                            bitmapWidth = 768,
-                                            bitmapHeight = 192
-                                        ).apply {
-                                            position = DaraBillboard.DEFAULT_OFFSET
-                                            isTouchable = false
-                                            isHittable = false
+                                        ViewNode(
+                                            windowManager = viewNodeManager,
+                                            unlit = true,
+                                            position = DaraBillboard.DEFAULT_OFFSET,
+                                            apply = {
+                                                isTouchable = false
+                                                isHittable = false
+                                            }
+                                        ) {
+                                            DaraBillboard.BillboardContent(
+                                                text = DaraBillboard.labelTextBetween(
+                                                    objectId = modelId,
+                                                    from = cameraPosition,
+                                                    to = Position(
+                                                        x = placed.localPosition.x,
+                                                        y = placed.localPosition.y,
+                                                        z = placed.localPosition.z
+                                                    )
+                                                ),
+                                                fontSizeSp = 18f,
+                                                textColor = Color.White,
+                                                backgroundColor = Color(0xCC111111)
+                                            )
                                         }
                                     }
 
