@@ -23,8 +23,8 @@ object DaraBillboard {
     )
 
     val DEFAULT_OFFSET = Position(0f, 0.35f, 0f)
-    val AUGMENTED_IMAGE_OFFSET = Position(0f, 0.002f, 0f)
-    val AUGMENTED_IMAGE_BACKGROUND_COLOR = Color.argb(51, 72, 72, 72)
+    val AUGMENTED_IMAGE_OFFSET = Position(0f, 0.04f, 0f)
+    val AUGMENTED_IMAGE_BACKGROUND_COLOR = Color.argb(210, 32, 32, 32)
 
     fun labelText(objectId: String, offset: Position = DEFAULT_OFFSET): String {
         return "$objectId - ${formatDistance(distanceFromObject(offset))}"
@@ -61,11 +61,11 @@ object DaraBillboard {
         extentX: Float?,
         extentZ: Float?
     ): AugmentedImageBillboardSpec {
-        val safeWidth = max(extentX ?: 0.20f, 0.12f)
-        val safeHeight = max(extentZ ?: 0.20f, 0.12f)
+        val safeWidth = max(extentX ?: 0.28f, 0.26f)
+        val safeHeight = max(extentZ ?: 0.20f, 0.20f)
         val aspectRatio = safeWidth / safeHeight
-        val longBitmapEdge = 1536
-        val minBitmapEdge = 512
+        val longBitmapEdge = 2048
+        val minBitmapEdge = 768
         val bitmapWidth: Int
         val bitmapHeight: Int
 

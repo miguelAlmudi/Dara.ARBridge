@@ -269,13 +269,6 @@ class DaraArRenderFragment : Fragment() {
         val rawPath = modelAssetPath
         val resolvedPath = resolveModelPath(rawPath)
         val imageTrackingEnabled = augmentedImageConfig.isEnabled
-        val billboardObjectId = if (imageTrackingEnabled) {
-            augmentedImageConfig.displayName
-        }
-        else {
-            modelId
-        }
-
         Log.d(logTag, "showArScene raw=$rawPath resolved=$resolvedPath augmentedImage=$augmentedImageConfig")
 
         val container = rootContainer ?: return
@@ -300,26 +293,28 @@ class DaraArRenderFragment : Fragment() {
                     val localRotation: Rotation = Rotation(x = 0f, y = 0f, z = 0f),
                     val scaleToUnits: Float = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS
                 )
+                data class ImageReference(
+                    val anchor: Anchor,
+                    val imageName: String,
+                    val extentX: Float,
+                    val extentZ: Float,
+                    val position: Position
+                )
                 val placedKeys = remember { mutableStateListOf<Placed>() }
                 val cachedInstances = remember { mutableMapOf<String, ModelInstance>() }
                 var frame by remember { mutableStateOf<Frame?>(null) }
                 var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
-                val latestCameraPosition = remember {
-                    AtomicReference(Position(0f, 0f, 0f))
-                }
+                var imageReference by remember { mutableStateOf<ImageReference?>(null) }
                 var markerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
-                val latestAugmentedImagePosition = remember {
-                    AtomicReference<Position?>(null)
-                }
-                val latestCanMeasureAugmentedImage = remember {
-                    AtomicReference(false)
+                val latestCameraDistanceText = remember {
+                    AtomicReference(CameraPoseManager.formatDistanceMeters(null))
                 }
                 var debugLog by remember {
                     mutableStateOf(
                         "raw=$rawPath\nresolved=$resolvedPath\naugmentedImage=${augmentedImageConfig.imageAssetPath}"
                     )
                 }
-                var isAddMode by remember { mutableStateOf(!imageTrackingEnabled) }
+                var isAddMode by remember { mutableStateOf(true) }
                 var controlMode by remember { mutableStateOf(ControlMode.GIZMO) }
                 var showSettings by remember { mutableStateOf(false) }
                 var isDraggingModel by remember { mutableStateOf(false) }
@@ -362,6 +357,8 @@ class DaraArRenderFragment : Fragment() {
                 val yellowMaterial = remember(materialLoader) {
                     materialLoader.createUnlitColorInstance(Color.Yellow)
                 }
+                val markerCameraPositionText = CameraPoseManager.formatPositionMeters(markerCameraPosition)
+                val cameraDistanceText = CameraPoseManager.formatDistanceMeters(markerCameraPosition)
 
                 Box(Modifier.fillMaxSize()) {
                     ARSceneView(
@@ -380,14 +377,11 @@ class DaraArRenderFragment : Fragment() {
                         modelLoader = modelLoader,
                         materialLoader = materialLoader,
                         surfaceType = SurfaceType.TextureSurface,
-                        planeRenderer = isAddMode && !imageTrackingEnabled,
+                        planeRenderer = isAddMode,
                         planeRendererVersion = PlaneRendererBase.Version.V2,
 
                         sessionConfiguration = { session, config ->
-                            config.planeFindingMode = if (imageTrackingEnabled)
-                                Config.PlaneFindingMode.DISABLED
-                            else
-                                Config.PlaneFindingMode.HORIZONTAL
+                            config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
                             config.depthMode = Config.DepthMode.DISABLED
                             config.lightEstimationMode = Config.LightEstimationMode.DISABLED
                             augmentedImageConfig
@@ -399,7 +393,8 @@ class DaraArRenderFragment : Fragment() {
 
                             // Gate AR processing until ARCore reports a valid camera track.
                             if (!trackingStateHandler.handle(arFrame.camera)) {
-                                latestCanMeasureAugmentedImage.set(false)
+                                markerCameraPosition = null
+                                latestCameraDistanceText.set(CameraPoseManager.formatDistanceMeters(null))
                                 return@onSessionUpdated
                             }
 
@@ -410,32 +405,57 @@ class DaraArRenderFragment : Fragment() {
                                 z = cameraPose.tz()
                             )
                             cameraPosition = currentCameraPosition
-                            latestCameraPosition.set(currentCameraPosition)
-                            markerCameraPosition = CameraPoseManager.relativeCameraPositionMeters(
-                                camera = arFrame.camera,
-                                originAnchor = placedKeys
-                                    .firstOrNull { placed -> placed.referenceImageName != null }
-                                    ?.anchor
-                            )
 
-                            if (imageTrackingEnabled && resolvedPath != null) {
-                                val trackedImage = session
+                            val trackedImage = if (imageTrackingEnabled) {
+                                session
                                     .getAllTrackables(AugmentedImage::class.java)
                                     .firstOrNull { image -> image.name == augmentedImageConfig.imageName }
+                                    ?.takeIf { image ->
+                                        image.trackingState == TrackingState.TRACKING
+                                    }
+                            }
+                            else {
+                                null
+                            }
 
-                                latestCanMeasureAugmentedImage.set(
-                                    trackedImage?.trackingState == TrackingState.TRACKING
+                            markerCameraPosition =
+                                CameraPoseManager.relativeCameraPositionMeters(
+                                    camera = arFrame.camera,
+                                    originPose = trackedImage?.centerPose
                                 )
+                            latestCameraDistanceText.set(
+                                CameraPoseManager.formatDistanceMeters(markerCameraPosition)
+                            )
 
+                            if (imageTrackingEnabled) {
                                 trackedImage
-                                    ?.takeIf { image -> image.trackingState == TrackingState.TRACKING }
                                     ?.let { image ->
                                         val currentImagePosition = Position(
                                             x = image.centerPose.tx(),
                                             y = image.centerPose.ty(),
                                             z = image.centerPose.tz()
                                         )
-                                        latestAugmentedImagePosition.set(currentImagePosition)
+
+                                        if (imageReference?.imageName != image.name) {
+                                            imageReference?.anchor?.detach()
+                                            imageReference = ImageReference(
+                                                anchor = image.createAnchor(image.centerPose),
+                                                imageName = image.name,
+                                                extentX = image.extentX,
+                                                extentZ = image.extentZ,
+                                                position = currentImagePosition
+                                            )
+                                            debugLog = "Augmented image reference detected\n image=${image.name}\n waiting for Add surface tap"
+                                            Log.d(logTag, "Augmented image reference detected image=${image.name}")
+                                        }
+                                        else {
+                                            imageReference = imageReference?.copy(
+                                                extentX = image.extentX,
+                                                extentZ = image.extentZ,
+                                                position = currentImagePosition
+                                            )
+                                        }
+
                                         val placedImageIndex = placedKeys.indexOfFirst { placed ->
                                             placed.referenceImageName == image.name
                                         }
@@ -447,39 +467,6 @@ class DaraArRenderFragment : Fragment() {
                                                 referenceImageExtentZ = image.extentZ,
                                                 referenceImagePosition = currentImagePosition
                                             )
-                                            return@let
-                                        }
-
-                                        try {
-                                            placedKeys.forEach { placed -> placed.anchor.detach() }
-                                            placedKeys.clear()
-                                            cachedInstances.clear()
-
-                                            val anchor = image.createAnchor(image.centerPose)
-                                            val modelInstance = modelLoader.createModelInstance(resolvedPath)
-                                            val key = "image_model_${System.nanoTime()}"
-
-                                            cachedInstances[key] = modelInstance
-                                            placedKeys.add(
-                                                Placed(
-                                                    anchor = anchor,
-                                                    instanceKey = key,
-                                                    referenceImageName = image.name,
-                                                    referenceImageExtentX = image.extentX,
-                                                    referenceImageExtentZ = image.extentZ,
-                                                    referenceImagePosition = currentImagePosition,
-                                                    localPosition = augmentedImageConfig.offset,
-                                                    scaleToUnits = augmentedImageConfig.modelScaleToUnits
-                                                )
-                                            )
-
-                                            isAddMode = false
-                                            debugLog = "Augmented image detected\n image=${image.name}\n path=$resolvedPath\n offset=${augmentedImageConfig.offset}\n scale=${augmentedImageConfig.modelScaleToUnits}"
-                                            Log.d(logTag, "Augmented image model added image=${image.name} key=$key path=$resolvedPath")
-                                        }
-                                        catch (ex: Exception) {
-                                            debugLog = "Error on augmented image model\n ${ex::class.java.simpleName}\n ${ex.message}\n path=$resolvedPath"
-                                            Log.e(logTag, "Error on augmented image model path=$resolvedPath", ex)
                                         }
                                     }
                             }
@@ -717,25 +704,49 @@ class DaraArRenderFragment : Fragment() {
                                         }
                                         else {
                                             try {
-                                                placedKeys.forEach { placed -> placed.anchor.detach() }
+                                                val imageRef = imageReference
+                                                if (imageTrackingEnabled && imageRef == null) {
+                                                    debugLog = "AR image not referenced yet\n scan marker before adding model"
+                                                    Log.w(logTag, "Cannot add image-referenced model before AR image reference exists")
+                                                    return@ARSceneView true
+                                                }
+
+                                                if (!imageTrackingEnabled) {
+                                                    placedKeys.forEach { placed -> placed.anchor.detach() }
+                                                }
                                                 placedKeys.clear()
                                                 cachedInstances.clear()
 
-                                                val anchor = hit.createAnchor()
+                                                val anchor = imageRef?.anchor ?: hit.createAnchor()
+                                                val localPosition = imageRef?.let { reference ->
+                                                    worldHitToAnchorLocalPosition(
+                                                        anchor = reference.anchor,
+                                                        hitPose = hit.hitPose
+                                                    )
+                                                } ?: Position(0f, 0f, 0f)
                                                 val modelInstance = modelLoader.createModelInstance(resolvedPath)
                                                 val key = "model_${System.nanoTime()}"
 
                                                 cachedInstances[key] = modelInstance
                                                 placedKeys.add(
-                                                        Placed(
-                                                            anchor = anchor,
-                                                            instanceKey = key,
-                                                            scaleToUnits = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS
-                                                        )
+                                                    Placed(
+                                                        anchor = anchor,
+                                                        instanceKey = key,
+                                                        referenceImageName = imageRef?.imageName,
+                                                        referenceImageExtentX = imageRef?.extentX,
+                                                        referenceImageExtentZ = imageRef?.extentZ,
+                                                        referenceImagePosition = imageRef?.position,
+                                                        localPosition = localPosition,
+                                                        scaleToUnits = if (imageTrackingEnabled)
+                                                            augmentedImageConfig.modelScaleToUnits
+                                                        else
+                                                            DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS
                                                     )
+                                                )
 
-                                                debugLog = "Model added\n count=${placedKeys.size}\n path=$resolvedPath\n key=$key"
-                                                Log.d(logTag, "Model added, key=$key path=$resolvedPath total=${placedKeys.size}")
+                                                isAddMode = false
+                                                debugLog = "Model added\n count=${placedKeys.size}\n path=$resolvedPath\n key=$key\n referencedBy=${imageRef?.imageName ?: "plane"}\n local=$localPosition"
+                                                Log.d(logTag, "Model added key=$key path=$resolvedPath reference=${imageRef?.imageName ?: "plane"} total=${placedKeys.size}")
                                             }
                                             catch (ex: Exception) {
                                                 debugLog = "Error on create model\n ${ex::class.java.simpleName}\n ${ex.message}\n path=$resolvedPath"
@@ -773,63 +784,55 @@ class DaraArRenderFragment : Fragment() {
                             )
                         }
 
-                        placedKeys.forEach { placed ->
-                            val instance: ModelInstance =
-                                cachedInstances[placed.instanceKey] ?: return@forEach
+                        if (imageTrackingEnabled) {
+                            imageReference?.let { reference ->
+                                AnchorNode(
+                                    anchor = reference.anchor,
+                                    onTrackingStateChanged = { state ->
+                                        Log.d(logTag, "Image reference anchor tracking state=$state image=${reference.imageName}")
+                                    }
+                                ) {
+                                    val billboardSpec = remember(
+                                        reference.extentX,
+                                        reference.extentZ
+                                    ) {
+                                        DaraBillboard.augmentedImageBillboardSpec(
+                                            extentX = reference.extentX,
+                                            extentZ = reference.extentZ
+                                        )
+                                    }
+                                    val billboardTitle = augmentedImageConfig.displayName
+                                    val billboardText = "$billboardTitle\n${latestCameraDistanceText.get()}"
+                                    val billboardBitmap = remember(
+                                        billboardSpec.bitmapWidth,
+                                        billboardSpec.bitmapHeight
+                                    ) {
+                                        Bitmap.createBitmap(
+                                            billboardSpec.bitmapWidth,
+                                            billboardSpec.bitmapHeight,
+                                            Bitmap.Config.ARGB_8888
+                                        )
+                                    }
+                                    DaraBillboard.renderTextBitmapInto(
+                                        bitmap = billboardBitmap,
+                                        text = billboardText,
+                                        fontSize = billboardSpec.fontSize,
+                                        textColor = android.graphics.Color.WHITE,
+                                        backgroundColor = DaraBillboard.AUGMENTED_IMAGE_BACKGROUND_COLOR
+                                    )
 
-                            AnchorNode(
-                                anchor = placed.anchor,
-                                onTrackingStateChanged = { state ->
-                                    Log.d(logTag, "Anchor tracking state=$state key=${placed.instanceKey}")
-                                }
-                            ) {
-                                val gestureControlEnabled = !isAddMode && controlMode == ControlMode.GESTURE
-
-                                if (imageTrackingEnabled) {
                                     Node(
                                         position = DaraBillboard.AUGMENTED_IMAGE_OFFSET,
                                         rotation = Rotation(x = -90f)
                                     ) {
-                                        val billboardSpec = remember(
-                                            placed.referenceImageExtentX,
-                                            placed.referenceImageExtentZ
-                                        ) {
-                                            DaraBillboard.augmentedImageBillboardSpec(
-                                                extentX = placed.referenceImageExtentX,
-                                                extentZ = placed.referenceImageExtentZ
-                                            )
-                                        }
-                                        val billboardBitmap = remember(
-                                            billboardSpec.bitmapWidth,
-                                            billboardSpec.bitmapHeight
-                                        ) {
-                                            Bitmap.createBitmap(
-                                                billboardSpec.bitmapWidth,
-                                                billboardSpec.bitmapHeight,
-                                                Bitmap.Config.ARGB_8888
-                                            )
-                                        }
                                         ImageNode(
                                             bitmap = billboardBitmap,
                                             size = billboardSpec.size,
                                             apply = {
-                                                var lastBillboardText: String? = null
+                                                var lastBillboardText: String? = billboardText
                                                 onFrame = {
-                                                    val imagePosition = latestAugmentedImagePosition.get()
                                                     val currentBillboardText =
-                                                        if (latestCanMeasureAugmentedImage.get() && imagePosition != null) {
-                                                            DaraBillboard.augmentedImageDistanceText(
-                                                                imageName = billboardObjectId,
-                                                                from = latestCameraPosition.get(),
-                                                                to = imagePosition
-                                                            )
-                                                        }
-                                                        else {
-                                                            DaraBillboard.augmentedImageMeasurementProblemText(
-                                                                billboardObjectId
-                                                            )
-                                                        }
-
+                                                        "$billboardTitle\n${latestCameraDistanceText.get()}"
                                                     if (currentBillboardText != lastBillboardText) {
                                                         DaraBillboard.renderTextBitmapInto(
                                                             bitmap = billboardBitmap,
@@ -848,6 +851,20 @@ class DaraArRenderFragment : Fragment() {
                                         )
                                     }
                                 }
+                            }
+                        }
+
+                        placedKeys.forEach { placed ->
+                            val instance: ModelInstance =
+                                cachedInstances[placed.instanceKey] ?: return@forEach
+
+                            AnchorNode(
+                                anchor = placed.anchor,
+                                onTrackingStateChanged = { state ->
+                                    Log.d(logTag, "Anchor tracking state=$state key=${placed.instanceKey}")
+                                }
+                            ) {
+                                val gestureControlEnabled = !isAddMode && controlMode == ControlMode.GESTURE
 
                                 Node(
                                     position = placed.localPosition,
@@ -1123,29 +1140,48 @@ class DaraArRenderFragment : Fragment() {
                         }
                     }
 
-                    Text(
+                    Column(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
-                            .background(Color.Black.copy(alpha = 0.85f))
-                            .padding(12.dp),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        text = buildString {
-                            append("\nresolved=$resolvedPath")
-                            //append("\nmodels=${placedKeys.size}")
-                            append("\nmode=${if (isAddMode) "Add" else "Edit"}")
-                            append("\nimageTracking=$imageTrackingEnabled")
-                            append("\nimage=${augmentedImageConfig.imageAssetPath}")
-                            append("\nplaneRenderer=${isAddMode && !imageTrackingEnabled}")
-                            append("\neditable=${!isAddMode && controlMode == ControlMode.GESTURE}")
-                            append("\ncontrol=${controlMode.name}")
-                            append("\ngizmoAxis=$activeGizmoAxis")
-                            append("\ncameraPosition=${CameraPoseManager.formatPositionMeters(markerCameraPosition)}")
-                            append("\nlocal=${placedKeys.firstOrNull()?.localPosition}")
-                            append("\n$debugLog")
-                        }
-                    )
+                            .padding(top = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.90f))
+                                .padding(12.dp),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            text = buildString {
+                                append("cameraPosition=$markerCameraPositionText")
+                                append("\ncameraDistance=$cameraDistanceText")
+                            }
+                        )
+
+                        Text(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .background(Color.Black.copy(alpha = 0.80f))
+                                .padding(12.dp),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            text = buildString {
+                                append("resolved=$resolvedPath")
+                                //append("\nmodels=${placedKeys.size}")
+                                append("\nmode=${if (isAddMode) "Add" else "Edit"}")
+                                append("\nimageTracking=$imageTrackingEnabled")
+                                append("\nimage=${augmentedImageConfig.imageAssetPath}")
+                                append("\nplaneRenderer=$isAddMode")
+                                append("\neditable=${!isAddMode && controlMode == ControlMode.GESTURE}")
+                                append("\ncontrol=${controlMode.name}")
+                                append("\ngizmoAxis=$activeGizmoAxis")
+                                append("\nlocal=${placedKeys.firstOrNull()?.localPosition}")
+                                append("\n$debugLog")
+                            }
+                        )
+                    }
 
                     if (!isCameraTracking) {
                         Column(
