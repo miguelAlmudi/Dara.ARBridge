@@ -814,6 +814,7 @@ class DaraArRenderFragment : Fragment() {
                                         position = DaraBillboard.AUGMENTED_IMAGE_OFFSET,
                                         rotation = Rotation(x = -90f),
                                         apply = {
+                                            pxPerUnits = DaraBillboard.VIEW_NODE_PIXELS_PER_UNIT * billboardSpec.textureScale
                                             isTouchable = false
                                             isHittable = false
                                         }
@@ -822,7 +823,10 @@ class DaraArRenderFragment : Fragment() {
                                             text = billboardText,
                                             fontSizeSp = billboardSpec.fontSizeSp,
                                             textColor = Color.White,
-                                            backgroundColor = Color.Transparent
+                                            backgroundColor = Color.Transparent,
+                                            outlineColor = Color(0x96EBEBEB),
+                                            outlineWidthDp = 1f,
+                                            renderScale = billboardSpec.textureScale
                                         )
                                     }
                                 }

@@ -2,6 +2,7 @@ package com.example.dara.arbridge
 
 import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -30,12 +31,16 @@ object DaraBillboard {
     data class AugmentedImageBillboardSpec(
         val size: Size,
         val fontSizeSp: Float,
-        val minFontSizeSp: Float = 8f
+        val minFontSizeSp: Float = 8f,
+        val textureScale: Float = 1f
     )
+
+    private const val AUGMENTED_IMAGE_TEXTURE_SCALE = 4f
 
     val DEFAULT_OFFSET = Position(0f, 0.35f, 0f)
     val AUGMENTED_IMAGE_OFFSET = Position(0f, 0.04f, 0f)
     val AUGMENTED_IMAGE_BACKGROUND_COLOR = AndroidColor.argb(210, 32, 32, 32)
+    const val VIEW_NODE_PIXELS_PER_UNIT = 250f
 
     fun labelText(objectId: String, offset: Position = DEFAULT_OFFSET): String {
         return "$objectId - ${formatDistance(distanceFromObject(offset))}"
@@ -78,8 +83,9 @@ object DaraBillboard {
 
         return AugmentedImageBillboardSpec(
             size = Size(x = safeWidth, y = safeHeight),
-            fontSizeSp = max(12f, min(34f, smallerEdge * 120f)),
-            minFontSizeSp = 8f
+            fontSizeSp = max(2f, min(5f, smallerEdge * 16f)),
+            minFontSizeSp = 2f,
+            textureScale = AUGMENTED_IMAGE_TEXTURE_SCALE
         )
     }
 
@@ -103,25 +109,44 @@ object DaraBillboard {
         fontSizeSp: Float,
         textColor: Color = Color.White,
         backgroundColor: Color = Color.Transparent,
+        outlineColor: Color? = null,
+        outlineWidthDp: Float = 1f,
+        renderScale: Float = 1f,
         modifier: Modifier = Modifier
     ) {
+        val safeRenderScale = renderScale.coerceAtLeast(1f)
         Box(
             modifier = modifier
                 .background(backgroundColor)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .then(
+                    if (outlineColor != null) {
+                        Modifier.border(
+                            width = (outlineWidthDp * safeRenderScale).dp,
+                            color = outlineColor
+                        )
+                    }
+                    else {
+                        Modifier
+                    }
+                )
+                .padding(
+                    horizontal = (8f * safeRenderScale).dp,
+                    vertical = (4f * safeRenderScale).dp
+                ),
             contentAlignment = Alignment.Center
         ) {
+            val scaledFontSizeSp = fontSizeSp * safeRenderScale
             Text(
                 text = text,
                 color = textColor,
-                fontSize = fontSizeSp.sp,
+                fontSize = scaledFontSizeSp.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
-                lineHeight = (fontSizeSp * 1.12f).sp,
+                lineHeight = (scaledFontSizeSp * 1.12f).sp,
                 style = TextStyle(
                     shadow = Shadow(
                         color = Color.Black,
-                        blurRadius = max(1f, fontSizeSp * 0.18f)
+                        blurRadius = max(1f, scaledFontSizeSp * 0.18f)
                     )
                 )
             )
