@@ -1107,7 +1107,7 @@ class DaraArRenderActivity : ComponentActivity() {
                         fontFamily = FontFamily.Monospace,
                         text = buildString {
                             append("cameraPosition=$markerCameraPositionText")
-                            append("\ncameraDistance=$cameraDistanceText")
+                            //append("\ncameraDistance=$cameraDistanceText")
                         }
                     )
 

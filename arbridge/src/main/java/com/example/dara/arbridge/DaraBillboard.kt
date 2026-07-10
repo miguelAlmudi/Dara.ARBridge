@@ -22,12 +22,10 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import androidx.compose.foundation.layout.size
 
 object DaraBillboard {
-    /**
-     * Spec visual para o ViewNode. Nao existe mais tamanho de Bitmap aqui.
-     * size continua em metros, porque esse e o tamanho do plano 3D do ViewNode/Billboard.
-     */
+
     data class AugmentedImageBillboardSpec(
         val size: Size,
         val fontSizeSp: Float,
@@ -89,10 +87,6 @@ object DaraBillboard {
         )
     }
 
-    /**
-     * Escala opcional para manter legibilidade conforme a distancia muda.
-     * Use no scale do node/pai, nao em Bitmap.
-     */
     fun scaleForDistance(
         distanceMeters: Float,
         minScale: Float = 0.75f,
@@ -115,8 +109,12 @@ object DaraBillboard {
         modifier: Modifier = Modifier
     ) {
         val safeRenderScale = renderScale.coerceAtLeast(1f)
+        val redrawTickDp = (text.hashCode() and 0x3FF) * 0.0001f
+        val squareSizeDp = (25f * safeRenderScale) + redrawTickDp
+
         Box(
             modifier = modifier
+                .size(squareSizeDp.dp)
                 .background(backgroundColor)
                 .then(
                     if (outlineColor != null) {
@@ -130,7 +128,7 @@ object DaraBillboard {
                     }
                 )
                 .padding(
-                    horizontal = (8f * safeRenderScale).dp,
+                    horizontal = (4f * safeRenderScale).dp,
                     vertical = (4f * safeRenderScale).dp
                 ),
             contentAlignment = Alignment.Center
