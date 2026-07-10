@@ -306,6 +306,12 @@ class DaraArRenderFragment : Fragment() {
                 var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
                 var imageReference by remember { mutableStateOf<ImageReference?>(null) }
                 var markerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
+                var virtualMarkerAnchor by remember { mutableStateOf<Anchor?>(null) }
+                var isAddingVirtualMarker by remember { mutableStateOf(false) }
+                var virtualMarkerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
+                var virtualMarkerDistanceText by remember {
+                    mutableStateOf(CameraPoseManager.formatDistanceMeters(null))
+                }
                 var cameraDistanceText by remember {
                     mutableStateOf(CameraPoseManager.formatDistanceMeters(null))
                 }
@@ -394,9 +400,13 @@ class DaraArRenderFragment : Fragment() {
                             // Gate AR processing until ARCore reports a valid camera track.
                             if (!trackingStateHandler.handle(arFrame.camera)) {
                                 markerCameraPosition = null
+                                virtualMarkerCameraPosition = null
                                 val unknownDistanceText = CameraPoseManager.formatDistanceMeters(null)
                                 if (cameraDistanceText != unknownDistanceText) {
                                     cameraDistanceText = unknownDistanceText
+                                }
+                                if (virtualMarkerDistanceText != unknownDistanceText) {
+                                    virtualMarkerDistanceText = unknownDistanceText
                                 }
                                 return@onSessionUpdated
                             }
@@ -429,6 +439,16 @@ class DaraArRenderFragment : Fragment() {
                             val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(markerCameraPosition)
                             if (cameraDistanceText != newCameraDistanceText) {
                                 cameraDistanceText = newCameraDistanceText
+                            }
+
+                            virtualMarkerCameraPosition =
+                                CameraPoseManager.relativeCameraPositionMeters(
+                                    camera = arFrame.camera,
+                                    originPose = virtualMarkerAnchor?.pose
+                                )
+                            val newVirtualMarkerDistanceText = CameraPoseManager.formatDistanceMeters(virtualMarkerCameraPosition)
+                            if (virtualMarkerDistanceText != newVirtualMarkerDistanceText) {
+                                virtualMarkerDistanceText = newVirtualMarkerDistanceText
                             }
 
                             if (imageTrackingEnabled) {
@@ -476,6 +496,38 @@ class DaraArRenderFragment : Fragment() {
                             }
                         },
                         onTouchEvent = { event: MotionEvent, hitResult ->
+                            if (isAddingVirtualMarker && event.action == MotionEvent.ACTION_UP) {
+                                val f = frame
+
+                                if (f == null) {
+                                    debugLog = "Virtual marker: No ARFrame"
+                                    Log.w(logTag, "Virtual marker: frame null")
+                                    return@ARSceneView true
+                                }
+
+                                val hits = f.hitTest(event.x, event.y)
+                                val hit = hits.firstOrNull { hitResult ->
+                                    val trackable = hitResult.trackable
+                                    trackable is Plane && trackable.isPoseInPolygon(hitResult.hitPose)
+                                }
+
+                                if (hit == null) {
+                                    debugLog = "Virtual marker: No Plane hit\n hits=${hits.size}"
+                                    Log.w(logTag, "Virtual marker: No plane found")
+                                }
+                                else {
+                                    virtualMarkerAnchor?.detach()
+                                    virtualMarkerAnchor = hit.createAnchor()
+                                    isAddingVirtualMarker = false
+                                    isAddMode = false
+                                    virtualMarkerCameraPosition = null
+                                    virtualMarkerDistanceText = CameraPoseManager.formatDistanceMeters(null)
+                                    debugLog = "Virtual marker added"
+                                    Log.d(logTag, "Virtual marker added")
+                                }
+
+                                return@ARSceneView true
+                            }
                             // Edit Mode
                             if (!isAddMode) {
                                 when (controlMode) {
@@ -677,6 +729,7 @@ class DaraArRenderFragment : Fragment() {
                             if (event.action == MotionEvent.ACTION_UP) {
                                 val f = frame
 
+
                                 when {
                                     f == null -> {
                                         debugLog = "No ARFrame"
@@ -829,6 +882,45 @@ class DaraArRenderFragment : Fragment() {
                                             renderScale = billboardSpec.textureScale
                                         )
                                     }
+                                }
+                            }
+                        }
+
+                        virtualMarkerAnchor?.let { anchor ->
+                            AnchorNode(
+                                anchor = anchor,
+                                onTrackingStateChanged = { state ->
+                                    Log.d(logTag, "Virtual marker anchor tracking state=$state")
+                                }
+                            ) {
+                                val virtualBillboardSpec = remember {
+                                    DaraBillboard.augmentedImageBillboardSpec(
+                                        extentX = null,
+                                        extentZ = null
+                                    )
+                                }
+                                val virtualBillboardText = "Marcador virtual\n$virtualMarkerDistanceText"
+
+                                ViewNode(
+                                    windowManager = viewNodeManager,
+                                    unlit = true,
+                                    position = DaraBillboard.AUGMENTED_IMAGE_OFFSET,
+                                    rotation = Rotation(x = -90f),
+                                    apply = {
+                                        pxPerUnits = DaraBillboard.VIEW_NODE_PIXELS_PER_UNIT * virtualBillboardSpec.textureScale
+                                        isTouchable = false
+                                        isHittable = false
+                                    }
+                                ) {
+                                    DaraBillboard.BillboardContent(
+                                        text = virtualBillboardText,
+                                        fontSizeSp = virtualBillboardSpec.fontSizeSp,
+                                        textColor = Color.White,
+                                        backgroundColor = Color.Transparent,
+                                        outlineColor = Color(0x96EBEBEB),
+                                        outlineWidthDp = 1f,
+                                        renderScale = virtualBillboardSpec.textureScale
+                                    )
                                 }
                             }
                         }
@@ -1253,6 +1345,21 @@ class DaraArRenderFragment : Fragment() {
                             }
                         ) {
                             Text("Foto")
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = {
+                                isAddingVirtualMarker = true
+                                isAddMode = true
+                                activeGizmoAxis = null
+                                activeGizmoAction = null
+                                isDraggingModel = false
+                                debugLog = "Toque em uma superfície para adicionar marcador virtual"
+                            }
+                        ) {
+                            Text("Marcador")
                         }
                     }
                 }
