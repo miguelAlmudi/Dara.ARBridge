@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -108,6 +109,12 @@ class DaraArRenderActivity : ComponentActivity() {
     private val requestCameraPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) startArCore() else showPermissionDenied()
+        }
+
+    private var pendingLocationPermissionResult: ((Boolean) -> Unit)? = null
+    private val requestLocationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            pendingLocationPermissionResult?.invoke(grants.values.any { it })
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -270,7 +277,7 @@ class DaraArRenderActivity : ComponentActivity() {
             var frame by remember { mutableStateOf<Frame?>(null) }
             var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
             var imageReference by remember { mutableStateOf<ImageReference?>(null) }
-            var markerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
+            var daraCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
             var virtualMarkerAnchor by remember { mutableStateOf<Anchor?>(null) }
             var isAddingVirtualMarker by remember { mutableStateOf(false) }
             var virtualMarkerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
@@ -279,6 +286,9 @@ class DaraArRenderActivity : ComponentActivity() {
             }
             var cameraDistanceText by remember {
                 mutableStateOf(CameraPoseManager.formatDistanceMeters(null))
+            }
+            var realWorldPositionText by remember {
+                mutableStateOf(RealWorldLocationTracker.LOCATION_WAITING_TEXT)
             }
             var debugLog by remember {
                 mutableStateOf(
@@ -328,7 +338,37 @@ class DaraArRenderActivity : ComponentActivity() {
             val yellowMaterial = remember(materialLoader) {
                 materialLoader.createUnlitColorInstance(Color.Yellow)
             }
-            val markerCameraPositionText = CameraPoseManager.formatPositionMeters(markerCameraPosition)
+            val daraCameraPositionText = CameraPoseManager.formatPositionMeters(daraCameraPosition)
+            DisposableEffect(Unit) {
+                val tracker = RealWorldLocationTracker(
+                    context = this@DaraArRenderActivity,
+                    mainHandler = mainHandler,
+                    logTag = tag,
+                    onPositionTextChanged = { text -> realWorldPositionText = text }
+                )
+
+                pendingLocationPermissionResult = { granted ->
+                    if (granted) {
+                        tracker.start()
+                    }
+                    else {
+                        realWorldPositionText = RealWorldLocationTracker.LOCATION_PERMISSION_DENIED_TEXT
+                    }
+                }
+
+                if (RealWorldLocationTracker.hasLocationPermission(this@DaraArRenderActivity)) {
+                    tracker.start()
+                }
+                else {
+                    realWorldPositionText = RealWorldLocationTracker.LOCATION_PERMISSION_PENDING_TEXT
+                    requestLocationPermission.launch(RealWorldLocationTracker.REQUIRED_PERMISSIONS)
+                }
+
+                onDispose {
+                    tracker.stop()
+                    pendingLocationPermissionResult = null
+                }
+            }
 
             Box(Modifier.fillMaxSize()) {
                 ARSceneView(
@@ -364,7 +404,7 @@ class DaraArRenderActivity : ComponentActivity() {
 
                         // Gate AR processing until ARCore reports a valid camera track.
                         if (!trackingStateHandler.handle(arFrame.camera)) {
-                            markerCameraPosition = null
+                            daraCameraPosition = null
                             virtualMarkerCameraPosition = null
                             val unknownDistanceText = CameraPoseManager.formatDistanceMeters(null)
                             if (cameraDistanceText != unknownDistanceText) {
@@ -396,12 +436,13 @@ class DaraArRenderActivity : ComponentActivity() {
                             null
                         }
 
-                        markerCameraPosition =
-                            CameraPoseManager.relativeCameraPositionMeters(
+                        daraCameraPosition =
+                            CameraPoseManager.cameraPositionInDaraWorldMeters(
                                 camera = arFrame.camera,
-                                originPose = trackedImage?.centerPose
+                                markerPoseInArCore = trackedImage?.centerPose,
+                                markerPoseInDaraWorld = augmentedImageConfig.markerPoseInDaraWorld
                             )
-                        val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(markerCameraPosition)
+                        val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(daraCameraPosition)
                         if (cameraDistanceText != newCameraDistanceText) {
                             cameraDistanceText = newCameraDistanceText
                         }
@@ -1197,7 +1238,8 @@ class DaraArRenderActivity : ComponentActivity() {
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         text = buildString {
-                            append("cameraPosition=$markerCameraPositionText")
+                            append("cameraDaraPosition=$daraCameraPositionText")
+                            //append("\nrealPosition=$realWorldPositionText")
                             //append("\ncameraDistance=$cameraDistanceText")
                         }
                     )
@@ -1216,6 +1258,7 @@ class DaraArRenderActivity : ComponentActivity() {
                             append("\nmode=${if (isAddMode) "Add" else "Edit"}")
                             append("\nimageTracking=$imageTrackingEnabled")
                             append("\nimage=${augmentedImageConfig.imageAssetPath}")
+                            append("\nmarkerDara=${CameraPoseManager.formatPositionMeters(augmentedImageConfig.markerPoseInDaraWorld.translation)}")
                             append("\nplaneRenderer=$isAddMode")
                             append("\neditable=${!isAddMode && controlMode == ControlMode.GESTURE}")
                             append("\ncontrol=${controlMode.name}")

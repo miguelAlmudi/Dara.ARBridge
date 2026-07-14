@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -110,6 +111,12 @@ class DaraArRenderFragment : Fragment() {
     private val requestCameraPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) startArCore() else showPermissionDenied()
+        }
+
+    private var pendingLocationPermissionResult: ((Boolean) -> Unit)? = null
+    private val requestLocationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            pendingLocationPermissionResult?.invoke(grants.values.any { it })
         }
 
     override fun onCreateView(
@@ -305,7 +312,7 @@ class DaraArRenderFragment : Fragment() {
                 var frame by remember { mutableStateOf<Frame?>(null) }
                 var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
                 var imageReference by remember { mutableStateOf<ImageReference?>(null) }
-                var markerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
+                var daraCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
                 var virtualMarkerAnchor by remember { mutableStateOf<Anchor?>(null) }
                 var isAddingVirtualMarker by remember { mutableStateOf(false) }
                 var virtualMarkerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
@@ -314,6 +321,9 @@ class DaraArRenderFragment : Fragment() {
                 }
                 var cameraDistanceText by remember {
                     mutableStateOf(CameraPoseManager.formatDistanceMeters(null))
+                }
+                var realWorldPositionText by remember {
+                    mutableStateOf(RealWorldLocationTracker.LOCATION_WAITING_TEXT)
                 }
                 var debugLog by remember {
                     mutableStateOf(
@@ -363,7 +373,38 @@ class DaraArRenderFragment : Fragment() {
                 val yellowMaterial = remember(materialLoader) {
                     materialLoader.createUnlitColorInstance(Color.Yellow)
                 }
-                val markerCameraPositionText = CameraPoseManager.formatPositionMeters(markerCameraPosition)
+                val daraCameraPositionText = CameraPoseManager.formatPositionMeters(daraCameraPosition)
+                DisposableEffect(Unit) {
+                    val context = requireContext()
+                    val tracker = RealWorldLocationTracker(
+                        context = context,
+                        mainHandler = mainHandler,
+                        logTag = logTag,
+                        onPositionTextChanged = { text -> realWorldPositionText = text }
+                    )
+
+                    pendingLocationPermissionResult = { granted ->
+                        if (granted) {
+                            tracker.start()
+                        }
+                        else {
+                            realWorldPositionText = RealWorldLocationTracker.LOCATION_PERMISSION_DENIED_TEXT
+                        }
+                    }
+
+                    if (RealWorldLocationTracker.hasLocationPermission(context)) {
+                        tracker.start()
+                    }
+                    else {
+                        realWorldPositionText = RealWorldLocationTracker.LOCATION_PERMISSION_PENDING_TEXT
+                        requestLocationPermission.launch(RealWorldLocationTracker.REQUIRED_PERMISSIONS)
+                    }
+
+                    onDispose {
+                        tracker.stop()
+                        pendingLocationPermissionResult = null
+                    }
+                }
 
                 Box(Modifier.fillMaxSize()) {
                     ARSceneView(
@@ -399,7 +440,7 @@ class DaraArRenderFragment : Fragment() {
 
                             // Gate AR processing until ARCore reports a valid camera track.
                             if (!trackingStateHandler.handle(arFrame.camera)) {
-                                markerCameraPosition = null
+                                daraCameraPosition = null
                                 virtualMarkerCameraPosition = null
                                 val unknownDistanceText = CameraPoseManager.formatDistanceMeters(null)
                                 if (cameraDistanceText != unknownDistanceText) {
@@ -431,12 +472,13 @@ class DaraArRenderFragment : Fragment() {
                                 null
                             }
 
-                            markerCameraPosition =
-                                CameraPoseManager.relativeCameraPositionMeters(
+                            daraCameraPosition =
+                                CameraPoseManager.cameraPositionInDaraWorldMeters(
                                     camera = arFrame.camera,
-                                    originPose = trackedImage?.centerPose
+                                    markerPoseInArCore = trackedImage?.centerPose,
+                                    markerPoseInDaraWorld = augmentedImageConfig.markerPoseInDaraWorld
                                 )
-                            val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(markerCameraPosition)
+                            val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(daraCameraPosition)
                             if (cameraDistanceText != newCameraDistanceText) {
                                 cameraDistanceText = newCameraDistanceText
                             }
@@ -1233,7 +1275,8 @@ class DaraArRenderFragment : Fragment() {
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                             text = buildString {
-                                append("cameraPosition=$markerCameraPositionText")
+                                append("cameraDaraPosition=$daraCameraPositionText")
+                                append("\nrealPosition=$realWorldPositionText")
                                 //append("\ncameraDistance=$cameraDistanceText")
                             }
                         )
@@ -1252,6 +1295,7 @@ class DaraArRenderFragment : Fragment() {
                                 append("\nmode=${if (isAddMode) "Add" else "Edit"}")
                                 append("\nimageTracking=$imageTrackingEnabled")
                                 append("\nimage=${augmentedImageConfig.imageAssetPath}")
+                                append("\nmarkerDara=${CameraPoseManager.formatPositionMeters(augmentedImageConfig.markerPoseInDaraWorld.translation)}")
                                 append("\nplaneRenderer=$isAddMode")
                                 append("\neditable=${!isAddMode && controlMode == ControlMode.GESTURE}")
                                 append("\ncontrol=${controlMode.name}")
@@ -1527,7 +1571,14 @@ class DaraArRenderFragment : Fragment() {
             modelOffsetXMeters: Float = 0f,
             modelOffsetYMeters: Float = 0f,
             modelOffsetZMeters: Float = 0f,
-            modelScaleToUnits: Float = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS
+            modelScaleToUnits: Float = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS,
+            markerDaraPositionXMeters: Float = 0f,
+            markerDaraPositionYMeters: Float = 0f,
+            markerDaraPositionZMeters: Float = 0f,
+            markerDaraRotationQx: Float = 0f,
+            markerDaraRotationQy: Float = 0f,
+            markerDaraRotationQz: Float = 0f,
+            markerDaraRotationQw: Float = 1f
         ): DaraArRenderFragment {
             return DaraArRenderFragment().apply {
                 arguments = Bundle().apply {
@@ -1543,6 +1594,13 @@ class DaraArRenderFragment : Fragment() {
                     putFloat(DaraArContract.EXTRA_MODEL_OFFSET_Y_METERS, modelOffsetYMeters)
                     putFloat(DaraArContract.EXTRA_MODEL_OFFSET_Z_METERS, modelOffsetZMeters)
                     putFloat(DaraArContract.EXTRA_MODEL_SCALE_TO_UNITS, modelScaleToUnits)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_POSITION_X_METERS, markerDaraPositionXMeters)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_POSITION_Y_METERS, markerDaraPositionYMeters)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_POSITION_Z_METERS, markerDaraPositionZMeters)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QX, markerDaraRotationQx)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QY, markerDaraRotationQy)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QZ, markerDaraRotationQz)
+                    putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QW, markerDaraRotationQw)
                 }
             }
         }

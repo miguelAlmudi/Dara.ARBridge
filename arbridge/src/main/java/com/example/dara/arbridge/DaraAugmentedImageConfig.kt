@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
 import com.google.ar.core.AugmentedImageDatabase
+import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import io.github.sceneview.math.Position
 
@@ -14,7 +15,8 @@ data class DaraAugmentedImageConfig(
     val imageName: String = DEFAULT_IMAGE_NAME,
     val physicalWidthMeters: Float? = null,
     val offset: Position = Position(0f, 0f, 0f),
-    val modelScaleToUnits: Float = DEFAULT_MODEL_SCALE_TO_UNITS
+    val modelScaleToUnits: Float = DEFAULT_MODEL_SCALE_TO_UNITS,
+    val markerPoseInDaraWorld: Pose = Pose.IDENTITY
 ) {
     val isEnabled: Boolean
         get() = !imageAssetPath.isNullOrBlank()
@@ -91,13 +93,27 @@ data class DaraAugmentedImageConfig(
                 key = DaraArContract.EXTRA_MODEL_SCALE_TO_UNITS,
                 defaultValue = DEFAULT_MODEL_SCALE_TO_UNITS
             ).takeIf { it > 0f } ?: DEFAULT_MODEL_SCALE_TO_UNITS
+            val markerPoseInDaraWorld = Pose(
+                floatArrayOf(
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_POSITION_X_METERS, 0f),
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_POSITION_Y_METERS, 0f),
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_POSITION_Z_METERS, 0f)
+                ),
+                floatArrayOf(
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_ROTATION_QX, 0f),
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_ROTATION_QY, 0f),
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_ROTATION_QZ, 0f),
+                    readFloat(bundle, intent, DaraArContract.EXTRA_MARKER_DARA_ROTATION_QW, 1f)
+                )
+            )
 
             return DaraAugmentedImageConfig(
                 imageAssetPath = imagePath,
                 imageName = imageName,
                 physicalWidthMeters = physicalWidth,
                 offset = offset,
-                modelScaleToUnits = scaleToUnits
+                modelScaleToUnits = scaleToUnits,
+                markerPoseInDaraWorld = markerPoseInDaraWorld
             )
         }
 

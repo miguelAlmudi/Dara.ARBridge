@@ -107,7 +107,14 @@ class MainActivity : FragmentActivity(), DaraArRenderFragment.Callback {
         modelOffsetXMeters: Float = 0f,
         modelOffsetYMeters: Float = 0f,
         modelOffsetZMeters: Float = 0f,
-        modelScaleToUnits: Float = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS
+        modelScaleToUnits: Float = DaraAugmentedImageConfig.DEFAULT_MODEL_SCALE_TO_UNITS,
+        markerDaraPositionXMeters: Float = 0f,
+        markerDaraPositionYMeters: Float = 0f,
+        markerDaraPositionZMeters: Float = 0f,
+        markerDaraRotationQx: Float = 0f,
+        markerDaraRotationQy: Float = 0f,
+        markerDaraRotationQz: Float = 0f,
+        markerDaraRotationQw: Float = 1f
     ) {
         val currentFragment = supportFragmentManager.findFragmentById(fragmentContainerId)
         if (currentFragment is DaraArRenderFragment) {
@@ -128,7 +135,14 @@ class MainActivity : FragmentActivity(), DaraArRenderFragment.Callback {
                     modelOffsetXMeters = modelOffsetXMeters,
                     modelOffsetYMeters = modelOffsetYMeters,
                     modelOffsetZMeters = modelOffsetZMeters,
-                    modelScaleToUnits = modelScaleToUnits
+                    modelScaleToUnits = modelScaleToUnits,
+                    markerDaraPositionXMeters = markerDaraPositionXMeters,
+                    markerDaraPositionYMeters = markerDaraPositionYMeters,
+                    markerDaraPositionZMeters = markerDaraPositionZMeters,
+                    markerDaraRotationQx = markerDaraRotationQx,
+                    markerDaraRotationQy = markerDaraRotationQy,
+                    markerDaraRotationQz = markerDaraRotationQz,
+                    markerDaraRotationQw = markerDaraRotationQw
                 )
             )
             .addToBackStack(AR_FRAGMENT_BACK_STACK_NAME)

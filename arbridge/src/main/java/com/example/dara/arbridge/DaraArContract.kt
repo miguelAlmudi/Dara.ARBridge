@@ -13,6 +13,13 @@ object DaraArContract {
     const val EXTRA_MODEL_OFFSET_Y_METERS = "modelOffsetYMeters"
     const val EXTRA_MODEL_OFFSET_Z_METERS = "modelOffsetZMeters"
     const val EXTRA_MODEL_SCALE_TO_UNITS = "modelScaleToUnits"
+    const val EXTRA_MARKER_DARA_POSITION_X_METERS = "markerDaraPositionXMeters"
+    const val EXTRA_MARKER_DARA_POSITION_Y_METERS = "markerDaraPositionYMeters"
+    const val EXTRA_MARKER_DARA_POSITION_Z_METERS = "markerDaraPositionZMeters"
+    const val EXTRA_MARKER_DARA_ROTATION_QX = "markerDaraRotationQx"
+    const val EXTRA_MARKER_DARA_ROTATION_QY = "markerDaraRotationQy"
+    const val EXTRA_MARKER_DARA_ROTATION_QZ = "markerDaraRotationQz"
+    const val EXTRA_MARKER_DARA_ROTATION_QW = "markerDaraRotationQw"
 
     const val RESULT_EVENT = "event"
     const val RESULT_OBJECT_ID = "objectId"

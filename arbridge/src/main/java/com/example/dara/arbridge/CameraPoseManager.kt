@@ -8,6 +8,47 @@ import java.util.Locale
 import kotlin.math.sqrt
 
 object CameraPoseManager {
+    fun cameraPoseInDaraWorld(
+        camera: Camera?,
+        markerPoseInArCore: Pose?,
+        markerPoseInDaraWorld: Pose
+    ): Pose? {
+        val cameraPoseInArCore = camera?.pose ?: return null
+        markerPoseInArCore ?: return null
+
+        val daraFromArCore = transformFromArCoreToDara(
+            markerPoseInDaraWorld = markerPoseInDaraWorld,
+            markerPoseInArCore = markerPoseInArCore
+        )
+
+        return daraFromArCore.compose(cameraPoseInArCore)
+    }
+
+    fun cameraPositionInDaraWorldMeters(
+        camera: Camera?,
+        markerPoseInArCore: Pose?,
+        markerPoseInDaraWorld: Pose
+    ): FloatArray? {
+        val cameraPoseInDara = cameraPoseInDaraWorld(
+            camera = camera,
+            markerPoseInArCore = markerPoseInArCore,
+            markerPoseInDaraWorld = markerPoseInDaraWorld
+        ) ?: return null
+
+        return floatArrayOf(
+            cameraPoseInDara.tx(),
+            cameraPoseInDara.ty(),
+            cameraPoseInDara.tz()
+        )
+    }
+
+    fun transformFromArCoreToDara(
+        markerPoseInDaraWorld: Pose,
+        markerPoseInArCore: Pose
+    ): Pose {
+        return markerPoseInDaraWorld.compose(markerPoseInArCore.inverse())
+    }
+
     fun relativeCameraPositionMeters(
         camera: Camera?,
         originAnchor: Anchor?
