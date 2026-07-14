@@ -327,6 +327,9 @@ class DaraArRenderFragment : Fragment() {
                 var visibleMarkerPoseInArCore by remember { mutableStateOf<com.google.ar.core.Pose?>(null) }
                 var visibleMarkerPoseInDara by remember { mutableStateOf<com.google.ar.core.Pose?>(null) }
                 var showMarkerEditor by remember { mutableStateOf(false) }
+                var editingMarkerName by remember { mutableStateOf<String?>(null) }
+                var editingMarkerPoseInArCore by remember { mutableStateOf<com.google.ar.core.Pose?>(null) }
+                var editingMarkerPoseInDara by remember { mutableStateOf<com.google.ar.core.Pose?>(null) }
                 var markerEditorX by remember { mutableStateOf("") }
                 var markerEditorY by remember { mutableStateOf("") }
                 var markerEditorZ by remember { mutableStateOf("") }
@@ -581,10 +584,36 @@ class DaraArRenderFragment : Fragment() {
                                     }
                                 }
 
-                                imageReference = trackedImage?.let { imageReferences[it.name] }
+                                trackedImage?.let { selectedImage ->
+                                    imageReference = imageReferences[selectedImage.name]
+                                }
                             }
                         },
                         onTouchEvent = { event: MotionEvent, hitResult ->
+                            val touchedNodeName = hitResult?.nodeOrNull?.name.orEmpty()
+                            if (
+                                event.actionMasked == MotionEvent.ACTION_UP &&
+                                touchedNodeName.startsWith("marker_billboard:")
+                            ) {
+                                val markerName = touchedNodeName.removePrefix("marker_billboard:")
+                                val reference = imageReferences[markerName]
+                                val arPose = reference?.anchor?.pose
+                                val daraPose = daraAlignment.markerPose(markerName)
+                                    ?: arPose?.let(daraAlignment::poseInDaraWorld)
+
+                                if (arPose != null && daraPose != null) {
+                                    editingMarkerName = markerName
+                                    editingMarkerPoseInArCore = arPose
+                                    editingMarkerPoseInDara = daraPose
+                                    markerEditorX = String.format(Locale.US, "%.3f", daraPose.tx())
+                                    markerEditorY = String.format(Locale.US, "%.3f", daraPose.ty())
+                                    markerEditorZ = String.format(Locale.US, "%.3f", daraPose.tz())
+                                    showMarkerEditor = true
+                                    debugLog = "Marker selected by billboard\n image=$markerName"
+                                }
+                                return@ARSceneView true
+                            }
+
                             if (isAddingVirtualMarker && event.action == MotionEvent.ACTION_UP) {
                                 val f = frame
 
@@ -956,9 +985,10 @@ class DaraArRenderFragment : Fragment() {
                                         position = DaraBillboard.AUGMENTED_IMAGE_OFFSET,
                                         rotation = Rotation(x = -90f),
                                         apply = {
+                                            name = "marker_billboard:${reference.imageName}"
                                             pxPerUnits = DaraBillboard.VIEW_NODE_PIXELS_PER_UNIT * billboardSpec.textureScale
-                                            isTouchable = false
-                                            isHittable = false
+                                            isTouchable = true
+                                            isHittable = true
                                         }
                                     ) {
                                         DaraBillboard.BillboardContent(
@@ -1208,16 +1238,26 @@ class DaraArRenderFragment : Fragment() {
                         Text("⚙")
                     }
 
-                    visibleMarkerName?.let { markerName ->
+                    (visibleMarkerName ?: imageReference?.imageName)?.let { markerName ->
                         Button(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .padding(12.dp),
                             onClick = {
-                                val position = visibleMarkerPoseInDara?.translation ?: return@Button
-                                markerEditorX = String.format(Locale.US, "%.3f", position[0])
-                                markerEditorY = String.format(Locale.US, "%.3f", position[1])
-                                markerEditorZ = String.format(Locale.US, "%.3f", position[2])
+                                val arPose = if (visibleMarkerName == markerName) {
+                                    visibleMarkerPoseInArCore
+                                } else {
+                                    imageReferences[markerName]?.anchor?.pose
+                                } ?: return@Button
+                                val daraPose = daraAlignment.markerPose(markerName)
+                                    ?: daraAlignment.poseInDaraWorld(arPose)
+                                    ?: return@Button
+                                editingMarkerName = markerName
+                                editingMarkerPoseInArCore = arPose
+                                editingMarkerPoseInDara = daraPose
+                                markerEditorX = String.format(Locale.US, "%.3f", daraPose.tx())
+                                markerEditorY = String.format(Locale.US, "%.3f", daraPose.ty())
+                                markerEditorZ = String.format(Locale.US, "%.3f", daraPose.tz())
                                 showMarkerEditor = true
                             }
                         ) {
@@ -1225,10 +1265,10 @@ class DaraArRenderFragment : Fragment() {
                         }
                     }
 
-                    if (showMarkerEditor && visibleMarkerName != null) {
+                    if (showMarkerEditor && editingMarkerName != null) {
                         AlertDialog(
                             onDismissRequest = { showMarkerEditor = false },
-                            title = { Text("Posição do marcador $visibleMarkerName") },
+                            title = { Text("Posição do marcador $editingMarkerName") },
                             text = {
                                 Column {
                                     Text("Coordenadas em DaraWorld (metros)")
@@ -1255,9 +1295,9 @@ class DaraArRenderFragment : Fragment() {
                             confirmButton = {
                                 Button(
                                     onClick = saveMarker@ {
-                                        val name = visibleMarkerName ?: return@saveMarker
-                                        val arPose = visibleMarkerPoseInArCore ?: return@saveMarker
-                                        val oldDaraPose = visibleMarkerPoseInDara ?: return@saveMarker
+                                        val name = editingMarkerName ?: return@saveMarker
+                                        val arPose = editingMarkerPoseInArCore ?: return@saveMarker
+                                        val oldDaraPose = editingMarkerPoseInDara ?: return@saveMarker
                                         val x = markerEditorX.replace(',', '.').toFloatOrNull() ?: return@saveMarker
                                         val y = markerEditorY.replace(',', '.').toFloatOrNull() ?: return@saveMarker
                                         val z = markerEditorZ.replace(',', '.').toFloatOrNull() ?: return@saveMarker
@@ -1266,7 +1306,10 @@ class DaraArRenderFragment : Fragment() {
                                             oldDaraPose.rotationQuaternion
                                         )
                                         daraAlignment.updateMarkerPose(name, correctedPose, arPose)
-                                        visibleMarkerPoseInDara = correctedPose
+                                        editingMarkerPoseInDara = correctedPose
+                                        if (visibleMarkerName == name) {
+                                            visibleMarkerPoseInDara = correctedPose
+                                        }
                                         val currentCameraPose = frame?.camera?.pose ?: return@saveMarker
                                         daraCameraPosition = daraAlignment.positionInDaraWorld(currentCameraPose)
                                         debugLog = "Marker corrected\n image=$name\n dara=${CameraPoseManager.formatPositionMeters(correctedPose.translation)}"
@@ -1397,7 +1440,7 @@ class DaraArRenderFragment : Fragment() {
                             fontFamily = FontFamily.Monospace,
                             text = buildString {
                                 append("cameraDaraPosition=$daraCameraPositionText")
-                                append("\nrealPosition=$realWorldPositionText")
+                                //append("\nrealPosition=$realWorldPositionText")
                                 //append("\ncameraDistance=$cameraDistanceText")
                             }
                         )
