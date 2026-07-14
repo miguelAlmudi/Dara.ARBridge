@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.FragmentActivity
+import com.google.ar.core.Pose
 
 class MainActivity : FragmentActivity(), DaraArRenderFragment.Callback {
 //test update changes
@@ -53,8 +54,20 @@ class MainActivity : FragmentActivity(), DaraArRenderFragment.Callback {
                 openArRenderFragment(
                     modelId = "lixo-123",
                     modelAssetPath = "lixo.glb",
-                    augmentedImageAssetPath = "markers/earth2.jpg",
-                    augmentedImageWidthMeters = 0.20f,
+                    augmentedImages = listOf(
+                        DaraAugmentedImageMarker(
+                            imageAssetPath = "markers/earth2.jpg",
+                            imageName = "earth2",
+                            physicalWidthMeters = 0.20f,
+                            markerPoseInDaraWorld = Pose.IDENTITY
+                        ),
+                        DaraAugmentedImageMarker(
+                            imageAssetPath = "markers/onca2.jpg",
+                            imageName = "onca2",
+                            physicalWidthMeters = 0.20f,
+                            markerPoseInDaraWorld = null
+                        )
+                    ),
                     modelOffsetXMeters = 0f,
                     modelOffsetYMeters = 0.05f,
                     modelOffsetZMeters = 0f,
@@ -114,7 +127,8 @@ class MainActivity : FragmentActivity(), DaraArRenderFragment.Callback {
         markerDaraRotationQx: Float = 0f,
         markerDaraRotationQy: Float = 0f,
         markerDaraRotationQz: Float = 0f,
-        markerDaraRotationQw: Float = 1f
+        markerDaraRotationQw: Float = 1f,
+        augmentedImages: List<DaraAugmentedImageMarker> = emptyList()
     ) {
         val currentFragment = supportFragmentManager.findFragmentById(fragmentContainerId)
         if (currentFragment is DaraArRenderFragment) {
@@ -142,7 +156,8 @@ class MainActivity : FragmentActivity(), DaraArRenderFragment.Callback {
                     markerDaraRotationQx = markerDaraRotationQx,
                     markerDaraRotationQy = markerDaraRotationQy,
                     markerDaraRotationQz = markerDaraRotationQz,
-                    markerDaraRotationQw = markerDaraRotationQw
+                    markerDaraRotationQw = markerDaraRotationQw,
+                    augmentedImages = augmentedImages
                 )
             )
             .addToBackStack(AR_FRAGMENT_BACK_STACK_NAME)

@@ -33,9 +33,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -311,8 +314,22 @@ class DaraArRenderFragment : Fragment() {
                 val cachedInstances = remember { mutableMapOf<String, ModelInstance>() }
                 var frame by remember { mutableStateOf<Frame?>(null) }
                 var cameraPosition by remember { mutableStateOf(Position(0f, 0f, 0f)) }
+                val imageReferences = remember { mutableStateMapOf<String, ImageReference>() }
+                // The currently visible reference is used only when adding/editing a model.
+                // All recognized references remain in imageReferences and keep rendering.
                 var imageReference by remember { mutableStateOf<ImageReference?>(null) }
                 var daraCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
+                val daraAlignment = remember(augmentedImageConfig) {
+                    DaraWorldAlignmentManager(augmentedImageConfig.effectiveMarkers)
+                }
+                val previouslyVisibleMarkerNames = remember { mutableSetOf<String>() }
+                var visibleMarkerName by remember { mutableStateOf<String?>(null) }
+                var visibleMarkerPoseInArCore by remember { mutableStateOf<com.google.ar.core.Pose?>(null) }
+                var visibleMarkerPoseInDara by remember { mutableStateOf<com.google.ar.core.Pose?>(null) }
+                var showMarkerEditor by remember { mutableStateOf(false) }
+                var markerEditorX by remember { mutableStateOf("") }
+                var markerEditorY by remember { mutableStateOf("") }
+                var markerEditorZ by remember { mutableStateOf("") }
                 var virtualMarkerAnchor by remember { mutableStateOf<Anchor?>(null) }
                 var isAddingVirtualMarker by remember { mutableStateOf(false) }
                 var virtualMarkerCameraPosition by remember { mutableStateOf<FloatArray?>(null) }
@@ -441,6 +458,10 @@ class DaraArRenderFragment : Fragment() {
                             // Gate AR processing until ARCore reports a valid camera track.
                             if (!trackingStateHandler.handle(arFrame.camera)) {
                                 daraCameraPosition = null
+                                visibleMarkerName = null
+                                visibleMarkerPoseInArCore = null
+                                visibleMarkerPoseInDara = null
+                                previouslyVisibleMarkerNames.clear()
                                 virtualMarkerCameraPosition = null
                                 val unknownDistanceText = CameraPoseManager.formatDistanceMeters(null)
                                 if (cameraDistanceText != unknownDistanceText) {
@@ -460,24 +481,43 @@ class DaraArRenderFragment : Fragment() {
                             )
                             cameraPosition = currentCameraPosition
 
-                            val trackedImage = if (imageTrackingEnabled) {
+                            val trackedImages = if (imageTrackingEnabled) {
                                 session
                                     .getAllTrackables(AugmentedImage::class.java)
-                                    .firstOrNull { image -> image.name == augmentedImageConfig.imageName }
-                                    ?.takeIf { image ->
+                                    .filter { image ->
+                                        augmentedImageConfig.effectiveMarkers.any { it.imageName == image.name } &&
                                         image.trackingState == TrackingState.TRACKING
                                     }
                             }
                             else {
-                                null
+                                emptyList()
                             }
 
-                            daraCameraPosition =
-                                CameraPoseManager.cameraPositionInDaraWorldMeters(
-                                    camera = arFrame.camera,
-                                    markerPoseInArCore = trackedImage?.centerPose,
-                                    markerPoseInDaraWorld = augmentedImageConfig.markerPoseInDaraWorld
+                            // A marker that just entered the camera becomes the latest reference.
+                            val trackedImage = trackedImages
+                                .firstOrNull { it.name !in previouslyVisibleMarkerNames }
+                                ?: trackedImages.firstOrNull {
+                                    it.name == daraAlignment.lastReferenceName
+                                }
+                                ?: trackedImages.firstOrNull()
+
+                            previouslyVisibleMarkerNames.clear()
+                            previouslyVisibleMarkerNames.addAll(trackedImages.map { it.name })
+
+                            if (trackedImage != null) {
+                                visibleMarkerName = trackedImage.name
+                                visibleMarkerPoseInArCore = trackedImage.centerPose
+                                visibleMarkerPoseInDara = daraAlignment.observeMarker(
+                                    imageName = trackedImage.name,
+                                    markerPoseInArCore = trackedImage.centerPose
                                 )
+                            } else {
+                                visibleMarkerName = null
+                                visibleMarkerPoseInArCore = null
+                                visibleMarkerPoseInDara = null
+                            }
+
+                            daraCameraPosition = daraAlignment.positionInDaraWorld(arFrame.camera.pose)
                             val newCameraDistanceText = CameraPoseManager.formatDistanceMeters(daraCameraPosition)
                             if (cameraDistanceText != newCameraDistanceText) {
                                 cameraDistanceText = newCameraDistanceText
@@ -494,47 +534,54 @@ class DaraArRenderFragment : Fragment() {
                             }
 
                             if (imageTrackingEnabled) {
-                                trackedImage
-                                    ?.let { image ->
-                                        val currentImagePosition = Position(
-                                            x = image.centerPose.tx(),
-                                            y = image.centerPose.ty(),
-                                            z = image.centerPose.tz()
+                                // A frame may contain several recognized images. Every tracked
+                                // image owns a persistent anchor/billboard; trackedImage above is
+                                // only the one selected for DaraWorld alignment and editing.
+                                trackedImages.forEach { image ->
+                                    val currentImagePosition = Position(
+                                        x = image.centerPose.tx(),
+                                        y = image.centerPose.ty(),
+                                        z = image.centerPose.tz()
+                                    )
+
+                                    val existingReference = imageReferences[image.name]
+                                    val updatedReference = if (existingReference == null) {
+                                        ImageReference(
+                                            anchor = image.createAnchor(image.centerPose),
+                                            imageName = image.name,
+                                            extentX = image.extentX,
+                                            extentZ = image.extentZ,
+                                            position = currentImagePosition
                                         )
-
-                                        if (imageReference?.imageName != image.name) {
-                                            imageReference?.anchor?.detach()
-                                            imageReference = ImageReference(
-                                                anchor = image.createAnchor(image.centerPose),
-                                                imageName = image.name,
-                                                extentX = image.extentX,
-                                                extentZ = image.extentZ,
-                                                position = currentImagePosition
-                                            )
-                                            debugLog = "Augmented image reference detected\n image=${image.name}\n waiting for Add surface tap"
-                                            Log.d(logTag, "Augmented image reference detected image=${image.name}")
-                                        }
-                                        else {
-                                            imageReference = imageReference?.copy(
-                                                extentX = image.extentX,
-                                                extentZ = image.extentZ,
-                                                position = currentImagePosition
-                                            )
-                                        }
-
-                                        val placedImageIndex = placedKeys.indexOfFirst { placed ->
-                                            placed.referenceImageName == image.name
-                                        }
-
-                                        if (placedImageIndex >= 0) {
-                                            val placed = placedKeys[placedImageIndex]
-                                            placedKeys[placedImageIndex] = placed.copy(
-                                                referenceImageExtentX = image.extentX,
-                                                referenceImageExtentZ = image.extentZ,
-                                                referenceImagePosition = currentImagePosition
-                                            )
-                                        }
+                                    } else {
+                                        existingReference.copy(
+                                            extentX = image.extentX,
+                                            extentZ = image.extentZ,
+                                            position = currentImagePosition
+                                        )
                                     }
+                                    imageReferences[image.name] = updatedReference
+
+                                    if (existingReference == null) {
+                                        debugLog = "Augmented image reference detected\n image=${image.name}\n waiting for Add surface tap"
+                                        Log.d(logTag, "Augmented image reference detected image=${image.name}")
+                                    }
+
+                                    val placedImageIndex = placedKeys.indexOfFirst { placed ->
+                                        placed.referenceImageName == image.name
+                                    }
+
+                                    if (placedImageIndex >= 0) {
+                                        val placed = placedKeys[placedImageIndex]
+                                        placedKeys[placedImageIndex] = placed.copy(
+                                            referenceImageExtentX = image.extentX,
+                                            referenceImageExtentZ = image.extentZ,
+                                            referenceImagePosition = currentImagePosition
+                                        )
+                                    }
+                                }
+
+                                imageReference = trackedImage?.let { imageReferences[it.name] }
                             }
                         },
                         onTouchEvent = { event: MotionEvent, hitResult ->
@@ -884,7 +931,7 @@ class DaraArRenderFragment : Fragment() {
                         }
 
                         if (imageTrackingEnabled) {
-                            imageReference?.let { reference ->
+                            imageReferences.values.forEach { reference ->
                                 AnchorNode(
                                     anchor = reference.anchor,
                                     onTrackingStateChanged = { state ->
@@ -900,7 +947,7 @@ class DaraArRenderFragment : Fragment() {
                                             extentZ = reference.extentZ
                                         )
                                     }
-                                    val billboardTitle = augmentedImageConfig.displayName
+                                    val billboardTitle = reference.imageName
                                     val billboardText = "$billboardTitle\n$cameraDistanceText"
 
                                     ViewNode(
@@ -1161,6 +1208,80 @@ class DaraArRenderFragment : Fragment() {
                         Text("⚙")
                     }
 
+                    visibleMarkerName?.let { markerName ->
+                        Button(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(12.dp),
+                            onClick = {
+                                val position = visibleMarkerPoseInDara?.translation ?: return@Button
+                                markerEditorX = String.format(Locale.US, "%.3f", position[0])
+                                markerEditorY = String.format(Locale.US, "%.3f", position[1])
+                                markerEditorZ = String.format(Locale.US, "%.3f", position[2])
+                                showMarkerEditor = true
+                            }
+                        ) {
+                            Text("Editar $markerName")
+                        }
+                    }
+
+                    if (showMarkerEditor && visibleMarkerName != null) {
+                        AlertDialog(
+                            onDismissRequest = { showMarkerEditor = false },
+                            title = { Text("Posição do marcador $visibleMarkerName") },
+                            text = {
+                                Column {
+                                    Text("Coordenadas em DaraWorld (metros)")
+                                    OutlinedTextField(
+                                        value = markerEditorX,
+                                        onValueChange = { markerEditorX = it },
+                                        label = { Text("X") },
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = markerEditorY,
+                                        onValueChange = { markerEditorY = it },
+                                        label = { Text("Y") },
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = markerEditorZ,
+                                        onValueChange = { markerEditorZ = it },
+                                        label = { Text("Z") },
+                                        singleLine = true
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                Button(
+                                    onClick = saveMarker@ {
+                                        val name = visibleMarkerName ?: return@saveMarker
+                                        val arPose = visibleMarkerPoseInArCore ?: return@saveMarker
+                                        val oldDaraPose = visibleMarkerPoseInDara ?: return@saveMarker
+                                        val x = markerEditorX.replace(',', '.').toFloatOrNull() ?: return@saveMarker
+                                        val y = markerEditorY.replace(',', '.').toFloatOrNull() ?: return@saveMarker
+                                        val z = markerEditorZ.replace(',', '.').toFloatOrNull() ?: return@saveMarker
+                                        val correctedPose = com.google.ar.core.Pose(
+                                            floatArrayOf(x, y, z),
+                                            oldDaraPose.rotationQuaternion
+                                        )
+                                        daraAlignment.updateMarkerPose(name, correctedPose, arPose)
+                                        visibleMarkerPoseInDara = correctedPose
+                                        val currentCameraPose = frame?.camera?.pose ?: return@saveMarker
+                                        daraCameraPosition = daraAlignment.positionInDaraWorld(currentCameraPose)
+                                        debugLog = "Marker corrected\n image=$name\n dara=${CameraPoseManager.formatPositionMeters(correctedPose.translation)}"
+                                        showMarkerEditor = false
+                                    }
+                                ) { Text("Salvar") }
+                            },
+                            dismissButton = {
+                                Button(onClick = { showMarkerEditor = false }) {
+                                    Text("Cancelar")
+                                }
+                            }
+                        )
+                    }
+
                     if (showSettings) {
                         Box(
                             modifier = Modifier
@@ -1294,8 +1415,10 @@ class DaraArRenderFragment : Fragment() {
                                 //append("\nmodels=${placedKeys.size}")
                                 append("\nmode=${if (isAddMode) "Add" else "Edit"}")
                                 append("\nimageTracking=$imageTrackingEnabled")
-                                append("\nimage=${augmentedImageConfig.imageAssetPath}")
-                                append("\nmarkerDara=${CameraPoseManager.formatPositionMeters(augmentedImageConfig.markerPoseInDaraWorld.translation)}")
+                                append("\nmarkers=${augmentedImageConfig.effectiveMarkers.joinToString { it.imageName }}")
+                                append("\nlastReference=${daraAlignment.lastReferenceName}")
+                                append("\nvisibleMarker=$visibleMarkerName")
+                                append("\nmarkerDara=${CameraPoseManager.formatPositionMeters(visibleMarkerPoseInDara?.translation)}")
                                 append("\nplaneRenderer=$isAddMode")
                                 append("\neditable=${!isAddMode && controlMode == ControlMode.GESTURE}")
                                 append("\ncontrol=${controlMode.name}")
@@ -1578,7 +1701,8 @@ class DaraArRenderFragment : Fragment() {
             markerDaraRotationQx: Float = 0f,
             markerDaraRotationQy: Float = 0f,
             markerDaraRotationQz: Float = 0f,
-            markerDaraRotationQw: Float = 1f
+            markerDaraRotationQw: Float = 1f,
+            augmentedImages: List<DaraAugmentedImageMarker> = emptyList()
         ): DaraArRenderFragment {
             return DaraArRenderFragment().apply {
                 arguments = Bundle().apply {
@@ -1601,6 +1725,38 @@ class DaraArRenderFragment : Fragment() {
                     putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QY, markerDaraRotationQy)
                     putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QZ, markerDaraRotationQz)
                     putFloat(DaraArContract.EXTRA_MARKER_DARA_ROTATION_QW, markerDaraRotationQw)
+                    if (augmentedImages.isNotEmpty()) {
+                        putStringArray(
+                            DaraArContract.EXTRA_AUGMENTED_IMAGE_ASSET_PATHS,
+                            augmentedImages.map { it.imageAssetPath }.toTypedArray()
+                        )
+                        putStringArray(
+                            DaraArContract.EXTRA_AUGMENTED_IMAGE_NAMES,
+                            augmentedImages.map { it.imageName }.toTypedArray()
+                        )
+                        putFloatArray(
+                            DaraArContract.EXTRA_AUGMENTED_IMAGE_WIDTHS_METERS,
+                            augmentedImages.map { it.physicalWidthMeters ?: Float.NaN }.toFloatArray()
+                        )
+                        putBooleanArray(
+                            DaraArContract.EXTRA_MARKER_DARA_POSE_KNOWN,
+                            augmentedImages.map { it.markerPoseInDaraWorld != null }.toBooleanArray()
+                        )
+                        putFloatArray(
+                            DaraArContract.EXTRA_MARKER_DARA_POSITIONS,
+                            augmentedImages.flatMap {
+                                (it.markerPoseInDaraWorld ?: com.google.ar.core.Pose.IDENTITY)
+                                    .translation.asList()
+                            }.toFloatArray()
+                        )
+                        putFloatArray(
+                            DaraArContract.EXTRA_MARKER_DARA_ROTATIONS,
+                            augmentedImages.flatMap {
+                                (it.markerPoseInDaraWorld ?: com.google.ar.core.Pose.IDENTITY)
+                                    .rotationQuaternion.asList()
+                            }.toFloatArray()
+                        )
+                    }
                 }
             }
         }
