@@ -9,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.TextStyle
@@ -114,7 +115,19 @@ object DaraBillboard {
         val widthDp = (42f * safeRenderScale) + redrawTickDp
         val heightDp = 28f * safeRenderScale
         val sizingModifier = if (fitContent) {
-            Modifier.padding(end = redrawTickDp.dp)
+            Modifier.layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                val squareHeight = placeable.width.coerceIn(
+                    minimumValue = constraints.minHeight,
+                    maximumValue = constraints.maxHeight
+                )
+                layout(placeable.width, squareHeight) {
+                    placeable.placeRelative(
+                        x = 0,
+                        y = (squareHeight - placeable.height) / 2
+                    )
+                }
+            }
         } else {
             Modifier.size(widthDp.dp, heightDp.dp)
         }
@@ -123,7 +136,6 @@ object DaraBillboard {
 
         Box(
             modifier = modifier
-                .then(sizingModifier)
                 .background(backgroundColor)
                 .then(
                     if (outlineColor != null) {
@@ -136,6 +148,7 @@ object DaraBillboard {
                         Modifier
                     }
                 )
+                .then(sizingModifier)
                 .padding(
                     horizontal = (horizontalPaddingDp * safeRenderScale).dp,
                     vertical = (verticalPaddingDp * safeRenderScale).dp
