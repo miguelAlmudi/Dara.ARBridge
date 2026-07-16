@@ -81,8 +81,8 @@ object DaraBillboard {
 
         return AugmentedImageBillboardSpec(
             size = Size(x = safeWidth, y = safeHeight),
-            fontSizeSp = max(2f, min(5f, smallerEdge * 16f)),
-            minFontSizeSp = 2f,
+            fontSizeSp = max(1.35f, min(2f, smallerEdge * 8f)),
+            minFontSizeSp = 1.35f,
             textureScale = AUGMENTED_IMAGE_TEXTURE_SCALE
         )
     }
@@ -106,15 +106,24 @@ object DaraBillboard {
         outlineColor: Color? = null,
         outlineWidthDp: Float = 1f,
         renderScale: Float = 1f,
+        fitContent: Boolean = false,
         modifier: Modifier = Modifier
     ) {
         val safeRenderScale = renderScale.coerceAtLeast(1f)
         val redrawTickDp = (text.hashCode() and 0x3FF) * 0.0001f
-        val squareSizeDp = (25f * safeRenderScale) + redrawTickDp
+        val widthDp = (42f * safeRenderScale) + redrawTickDp
+        val heightDp = 28f * safeRenderScale
+        val sizingModifier = if (fitContent) {
+            Modifier.padding(end = redrawTickDp.dp)
+        } else {
+            Modifier.size(widthDp.dp, heightDp.dp)
+        }
+        val horizontalPaddingDp = if (fitContent) 1.25f else 3f
+        val verticalPaddingDp = if (fitContent) 0.75f else 2f
 
         Box(
             modifier = modifier
-                .size(squareSizeDp.dp)
+                .then(sizingModifier)
                 .background(backgroundColor)
                 .then(
                     if (outlineColor != null) {
@@ -128,8 +137,8 @@ object DaraBillboard {
                     }
                 )
                 .padding(
-                    horizontal = (4f * safeRenderScale).dp,
-                    vertical = (4f * safeRenderScale).dp
+                    horizontal = (horizontalPaddingDp * safeRenderScale).dp,
+                    vertical = (verticalPaddingDp * safeRenderScale).dp
                 ),
             contentAlignment = Alignment.Center
         ) {

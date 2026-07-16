@@ -8,6 +8,16 @@ import java.util.Locale
 import kotlin.math.sqrt
 
 object CameraPoseManager {
+    fun calculateArToDaraTransform(
+        markerArPose: Pose,
+        markerDaraPose: Pose
+    ): Pose = markerDaraPose.compose(markerArPose.inverse())
+
+    fun cameraPoseInDaraWorld(
+        cameraArPose: Pose,
+        arToDaraTransform: Pose
+    ): Pose = arToDaraTransform.compose(cameraArPose)
+
     fun cameraPoseInDaraWorld(
         camera: Camera?,
         markerPoseInArCore: Pose?,
@@ -21,7 +31,7 @@ object CameraPoseManager {
             markerPoseInArCore = markerPoseInArCore
         )
 
-        return daraFromArCore.compose(cameraPoseInArCore)
+        return cameraPoseInDaraWorld(cameraPoseInArCore, daraFromArCore)
     }
 
     fun cameraPositionInDaraWorldMeters(
@@ -46,7 +56,23 @@ object CameraPoseManager {
         markerPoseInDaraWorld: Pose,
         markerPoseInArCore: Pose
     ): Pose {
-        return markerPoseInDaraWorld.compose(markerPoseInArCore.inverse())
+        return calculateArToDaraTransform(
+            markerArPose = markerPoseInArCore,
+            markerDaraPose = markerPoseInDaraWorld
+        )
+    }
+
+    fun distanceCameraToPoseMeters(camera: Camera, targetPose: Pose): Float {
+        val cameraPose = camera.pose
+        val dx = cameraPose.tx() - targetPose.tx()
+        val dy = cameraPose.ty() - targetPose.ty()
+        val dz = cameraPose.tz() - targetPose.tz()
+        return sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    fun formatPhysicalDistanceMeters(distanceMeters: Float?): String {
+        return distanceMeters?.let { String.format(Locale.US, "%.3f m", it) }
+            ?: "aguardando marcador"
     }
 
     fun relativeCameraPositionMeters(

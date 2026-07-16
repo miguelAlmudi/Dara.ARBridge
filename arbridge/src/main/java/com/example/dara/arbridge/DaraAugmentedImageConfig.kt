@@ -14,7 +14,7 @@ data class DaraAugmentedImageMarker(
     val imageAssetPath: String,
     val imageName: String,
     val physicalWidthMeters: Float? = null,
-    /** Null means that the position will be estimated from the current Dara alignment. */
+    /** Null delegates the Dara pose lookup to [DaraMarkerDefinitions]. */
     val markerPoseInDaraWorld: Pose? = null
 )
 
@@ -37,6 +37,11 @@ data class DaraAugmentedImageConfig(
                     physicalWidthMeters = physicalWidthMeters,
                     markerPoseInDaraWorld = markerPoseInDaraWorld
                 )
+            )
+        }.map { marker ->
+            if (marker.markerPoseInDaraWorld != null) marker
+            else marker.copy(
+                markerPoseInDaraWorld = DaraMarkerDefinitions.find(marker.imageName)?.daraPose
             )
         }
 
